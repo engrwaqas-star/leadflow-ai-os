@@ -1,0 +1,6 @@
+{
+  "name": "LeadFlow AI — Freelance Client Outreach & Lead Generation OS",
+  "description": "Lead generation, website audit, AI lead scoring, and automated cold outreach OS for freelancers and agencies.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
