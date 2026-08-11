@@ -1,11 +1,13 @@
 {
-  "name": "react-example",
+  "name": "leadflow-ai-os",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
+  "description": "LeadFlow AI OS - All-in-one AI Client Acquisition, Automated Website Audits, and Cold Outreach CRM",
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
     "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
+    "build:pages": "vite build",
     "start": "node dist/server.cjs",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
