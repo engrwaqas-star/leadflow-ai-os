@@ -91,6 +91,26 @@ The application is engineered to work **100% free** using standard free-tier API
 
 ---
 
+## ⚡ Deploying to GitHub Pages (100% Free Hosting)
+
+This project includes a pre-configured **GitHub Actions Workflow** (`.github/workflows/deploy.yml`) that automatically builds and publishes the web application to GitHub Pages whenever code is pushed.
+
+### Method A: Automatic Deployment via GitHub Actions
+1. Go to your repository on GitHub: `https://github.com/engrwaqas-star/leadflow-ai-os`
+2. Click **Settings** -> **Pages** (in the left sidebar under *Code and automation*).
+3. Under **Build and deployment** -> **Source**, select **GitHub Actions**.
+4. Push any commit or trigger the workflow manually in the **Actions** tab. Your live app will be published at:
+   `https://engrwaqas-star.github.io/leadflow-ai-os/`
+
+### Method B: Manual Command Line Deploy
+If you want to deploy from your terminal:
+```bash
+npm run deploy
+```
+This builds the site and pushes the output directly to the `gh-pages` branch.
+
+---
+
 ## 🔑 How to Use 100% Free Without Hosting Costs
 
 1. **Free Hosting**: You can deploy this app for $0/month on:
