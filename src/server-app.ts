@@ -1,5 +1,6 @@
 import express, { Request, Response } from "express";
 import { GoogleGenAI, Type } from "@google/genai";
+import { getLiveDataProvider } from "./providers/LiveDataProvider";
 
 export const app = express();
 
@@ -68,94 +69,55 @@ app.get("/api/health", (req: Request, res: Response) => {
   });
 });
 
-// 2. AI Lead Discovery
+// 2. AI Lead Discovery (Provider-Agnostic Interface)
 app.post("/api/ai/find-clients", async (req: Request, res: Response) => {
   try {
-    const { country, industry, city } = req.body;
-    const ai = getAI();
+    const { country, industry, city, opportunityType, budgetTarget } = req.body;
+    const provider = getLiveDataProvider();
 
-    const prompt = `You are an expert B2B lead generation engine for freelance web developers.
-Find 6 REAL or highly realistic prospect businesses for freelance outreach in:
-- Country: ${country || "USA"}
-- Industry: ${industry || "Real Estate"}
-- City/Keyword: ${city || "General"}
+    if (!provider.isConfigured()) {
+      return res.status(503).json({
+        success: false,
+        error: "Live lead provider not configured. Please connect an active live data provider or API key in environment settings.",
+        code: "LIVE_PROVIDER_NOT_CONFIGURED",
+        leads: [],
+      });
+    }
 
-Requirements:
-1. Provide accurate business names and location details strictly belonging to ${city || country}.
-2. Identify a realistic website flaw or weakness (mobile responsiveness, slow load time, missing CTA, outdated design).
-3. Do NOT reuse generic templated company names. Each search must return unique leads tailored to ${city || country} and ${industry}.
+    const result = await provider.fetchLeads({ country, industry, city, opportunityType, budgetTarget });
 
-Return JSON matching this exact structure:
-[
-  {
-    "businessName": "Business Name",
-    "contactPerson": "Full Name (Role)",
-    "email": "contact@example.com",
-    "phone": "+1 555-0123",
-    "website": "www.example.com",
-    "address": "123 Main St, City",
-    "city": "${city || "Local"}",
-    "country": "${country || "USA"}",
-    "industry": "${industry || "Real Estate"}",
-    "score": 85,
-    "temperature": "WARM",
-    "websiteStatus": "Needs Mobile Redesign & CTA",
-    "suggestedService": "Modern Responsive Redesign & Booking Engine",
-    "auditIssue": "Lacks mobile responsiveness, no direct appointment CTA button.",
-    "pitchHook": "I noticed your site takes over 4 seconds to load on mobile viewports."
-  }
-]`;
+    if (!result.success) {
+      if (result.code === "LIVE_PROVIDER_NOT_CONFIGURED") {
+        return res.status(503).json({
+          success: false,
+          error: result.error || "Live lead provider not configured",
+          code: "LIVE_PROVIDER_NOT_CONFIGURED",
+          leads: [],
+        });
+      }
+      return res.status(500).json({
+        success: false,
+        error: result.error || "Failed to fetch leads from live provider",
+        code: result.code || "LIVE_PROVIDER_FETCH_ERROR",
+        leads: [],
+      });
+    }
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.6-flash",
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.ARRAY,
-          items: {
-            type: Type.OBJECT,
-            properties: {
-              businessName: { type: Type.STRING },
-              contactPerson: { type: Type.STRING },
-              email: { type: Type.STRING },
-              phone: { type: Type.STRING },
-              website: { type: Type.STRING },
-              address: { type: Type.STRING },
-              city: { type: Type.STRING },
-              country: { type: Type.STRING },
-              industry: { type: Type.STRING },
-              score: { type: Type.INTEGER },
-              temperature: { type: Type.STRING },
-              websiteStatus: { type: Type.STRING },
-              suggestedService: { type: Type.STRING },
-              auditIssue: { type: Type.STRING },
-              pitchHook: { type: Type.STRING },
-            },
-            required: [
-              "businessName",
-              "contactPerson",
-              "email",
-              "website",
-              "score",
-              "temperature",
-              "suggestedService",
-              "auditIssue",
-              "pitchHook",
-            ],
-          },
-        },
-      },
-    });
-
-    const leads = JSON.parse(response.text || "[]");
     res.json({
       success: true,
-      leads,
-      provider: "gemini-3.6-flash",
-      query: { country, industry, city },
+      leads: result.leads || [],
+      provider: result.provider,
+      query: { country, industry, city, opportunityType, budgetTarget },
     });
   } catch (err: any) {
+    if (err?.code === "API_KEY_MISSING" || err?.code === "LIVE_PROVIDER_NOT_CONFIGURED") {
+      return res.status(503).json({
+        success: false,
+        error: "Live lead provider not configured. Please connect an active live data provider or API key in environment settings.",
+        code: "LIVE_PROVIDER_NOT_CONFIGURED",
+        leads: [],
+      });
+    }
     handleAIError(err, res, "Live lead discovery source unavailable");
   }
 });

@@ -176,70 +176,41 @@ export const KashiAgentView: React.FC<KashiAgentViewProps> = ({
   const [workMetric, setWorkMetric] = useState('');
 
   // 3. Real Website Captures State & Viewport Inspector
-  const [selectedCaptureLead, setSelectedCaptureLead] = useState<Lead>(leads[0] || {
-    id: 'demo-lead',
-    businessName: 'Apex Dental Care',
-    contactPerson: 'Dr. Smith',
-    email: 'info@apexdental.com',
-    phone: '+1 555-0192',
-    website: 'apexdental.com',
-    industry: 'Dentistry',
-    pageSpeedScore: 38,
-    mobileResponsive: false,
-    contactStatus: 'Contacted',
-    dateAdded: todayDateStr
-  });
+  const [selectedCaptureLead, setSelectedCaptureLead] = useState<Lead | undefined>(leads[0]);
 
   const [activeViewport, setActiveViewport] = useState<'desktop' | 'mobile' | 'iframe'>('desktop');
 
   // Team Pending Tasks State
-  const [teamTasks, setTeamTasks] = useState<KashiTaskItem[]>([
-    {
-      id: 'task-1',
-      leadId: leads[0]?.id,
-      businessName: leads[0]?.businessName || 'Apex Dental Care',
-      title: 'Sub-second React App Migration & Speed Boost',
-      description: 'Optimize image assets, strip unneeded scripts, deliver 99/100 PageSpeed.',
-      assignedTo: 'Muhammad Waqas',
-      priority: 'High',
-      status: 'In Progress',
-      dueDate: new Date(Date.now() + 86400000 * 2).toISOString().split('T')[0],
-      category: 'PageSpeed Fix',
-      createdAt: todayDateStr,
-    },
-    {
-      id: 'task-2',
-      leadId: leads[1]?.id,
-      businessName: leads[1]?.businessName || 'Elite Legal Partners',
-      title: 'Mobile Touch Layout & WhatsApp Booking Integration',
-      description: 'Fix non-responsive mobile buttons and route inquiries directly to WhatsApp.',
-      assignedTo: 'Frontend Dev',
-      priority: 'Medium',
-      status: 'Pending',
-      dueDate: new Date(Date.now() + 86400000 * 3).toISOString().split('T')[0],
-      category: 'Mobile Layout',
-      createdAt: todayDateStr,
-    },
-  ]);
+  const [teamTasks, setTeamTasks] = useState<KashiTaskItem[]>(() => {
+    if (leads.length > 0) {
+      return [
+        {
+          id: 'task-1',
+          leadId: leads[0]?.id,
+          businessName: leads[0]?.businessName,
+          title: 'Sub-second React App Migration & Speed Boost',
+          description: 'Optimize image assets, strip unneeded scripts, deliver 99/100 PageSpeed.',
+          assignedTo: profile.name || 'Muhammad Waqas',
+          priority: 'High',
+          status: 'In Progress',
+          dueDate: new Date(Date.now() + 86400000 * 2).toISOString().split('T')[0],
+          category: 'PageSpeed Fix',
+          createdAt: todayDateStr,
+        }
+      ];
+    }
+    return [];
+  });
 
   // Activity Logs
   const [activityLogs, setActivityLogs] = useState<KashiLogEntry[]>([
     {
       id: 'log-1',
-      timestamp: new Date(Date.now() - 3600000 * 2).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       actionType: 'DAILY_REMINDER',
-      title: 'Daily Outreach Reminder',
-      details: `Good morning ${profile.name}! Your daily target is 30 leads. Currently at ${contactedTodayCount}/30. Kashi is standing by to auto-dispatch remaining pitches.`,
+      title: 'Daily Outreach Ready',
+      details: `Good morning ${profile.name}! Kashi Agent initialized and ready. Search or import new leads to begin outreach.`,
       status: 'INFO',
-    },
-    {
-      id: 'log-2',
-      timestamp: new Date(Date.now() - 3600000 * 4).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      actionType: 'OPPORTUNITY_CAUGHT',
-      title: 'Opportunity Detected in Inbox',
-      details: 'Apex Dental Care replied asking about redesign pricing and timeline. Kashi prepared a proposal draft referencing your portfolio.',
-      leadName: 'Apex Dental Care',
-      status: 'SUCCESS',
     },
   ]);
 

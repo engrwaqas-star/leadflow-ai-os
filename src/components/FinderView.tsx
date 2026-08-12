@@ -80,7 +80,6 @@ export const FinderView: React.FC<FinderViewProps> = ({
 
   // Parameterized Search Cache (Key: country|city|industry|oppType|budget)
   const [searchCache, setSearchCache] = useState<Record<string, { leads: any[]; summary: any }>>({});
-  const [isDemoDataMode, setIsDemoDataMode] = useState(false);
 
   // Modal States
   const [activeScoreModal, setActiveScoreModal] = useState<{ lead: any; scoreData: ScoreBreakdown } | null>(null);
@@ -224,89 +223,6 @@ export const FinderView: React.FC<FinderViewProps> = ({
     setImportedIds((prev) => ({ ...prev, [index]: true }));
   };
 
-  // Demo Dataset
-  const sampleDemoLeads = [
-    {
-      businessName: 'Apex Residential Realty (Demo)',
-      contactPerson: 'Marcus Vance (Founder)',
-      email: 'marcus@apexrealty.demo',
-      phone: '+1 (555) 019-2834',
-      website: 'www.apexrealty.demo',
-      city: 'Austin',
-      country: 'USA',
-      industry: 'Real Estate / Realtors',
-      score: 92,
-      temperature: 'HOT',
-      verificationStatus: 'VERIFIED',
-      websiteStatus: 'Needs Mobile Redesign & Instant Booking CTA',
-      suggestedService: 'Full React Mobile Redesign & Booking Widget',
-      auditIssue: 'Slow mobile load time (4.2s) and no direct tap-to-call button.',
-      pitchHook: 'I noticed your property listing page takes over 4 seconds on mobile devices.',
-      evidenceText: 'Founder Marcus Vance posted a hiring notice for custom website overhaul in Q3.',
-      source: 'Startup Directory',
-    },
-    {
-      businessName: 'Vanguard Legal Group (Demo)',
-      contactPerson: 'Elena Rostova (Managing Partner)',
-      email: 'elena@vanguardlaw.demo',
-      phone: '+1 (555) 014-9921',
-      website: 'www.vanguardlaw.demo',
-      city: 'Chicago',
-      country: 'USA',
-      industry: 'Law Firms',
-      score: 86,
-      temperature: 'WARM',
-      verificationStatus: 'VERIFIED',
-      websiteStatus: 'Outdated Desktop Layout & Slow Hero Video',
-      suggestedService: 'Sub-second Modernization & High-Trust Funnel',
-      auditIssue: 'Hero background video stalls on 4G cellular connections.',
-      pitchHook: 'Compressing heavy hero video assets could save 3+ seconds on mobile load times.',
-      evidenceText: 'Site speed audit verified 5.1s load time. SSL active.',
-      source: 'Business Register',
-    },
-    {
-      businessName: 'Nexus Cloud Analytics (Demo)',
-      contactPerson: 'David Chen (Head of Product)',
-      email: 'david@nexuscloud.demo',
-      phone: '+1 (555) 018-4422',
-      website: 'www.nexuscloud.demo',
-      city: 'San Francisco',
-      country: 'USA',
-      industry: 'SaaS & Startups',
-      score: 95,
-      temperature: 'HOT',
-      verificationStatus: 'VERIFIED',
-      websiteStatus: 'SaaS MVP Frontend Dashboard & Client Portal Needed',
-      suggestedService: 'React Analytics Portal & Auth Frontend',
-      auditIssue: 'Currently using default theme template without customer analytics view.',
-      pitchHook: 'Building a dedicated client portal with Recharts could boost user retention.',
-      evidenceText: 'Public beta release announcement requested frontend React engineering partner.',
-      source: 'Tech Crunch Beta',
-    },
-  ];
-
-  // Demo Jobs Dataset
-  const sampleJobOpportunities = [
-    {
-      company: 'GrowthScale AI',
-      role: 'Remote Frontend React Developer (Contract)',
-      location: 'Remote (USA / Global)',
-      budget: '$2,500 – $4,000 / month',
-      skills: ['React', 'TypeScript', 'Tailwind CSS', 'REST APIs'],
-      source: 'Remote Tech Job Board',
-      description: 'Looking for a skilled frontend developer to implement custom SaaS dashboard layouts and responsive UI components.',
-    },
-    {
-      company: 'Zenith Design Agency',
-      role: 'Freelance Web Developer (Website Redesigns)',
-      location: 'Remote',
-      budget: '$2,000 – $3,500 / project',
-      skills: ['HTML5', 'CSS3', 'JavaScript', 'Responsive UI'],
-      source: 'Agency Subcontract Network',
-      description: 'Subcontracting client website implementations. Requires clean code, fast page speed, and responsive layout polish.',
-    },
-  ];
-
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -321,19 +237,6 @@ export const FinderView: React.FC<FinderViewProps> = ({
         </div>
 
         <div className="flex items-center gap-3">
-          {/* Explicit Demo Mode Toggle */}
-          <button
-            onClick={() => setIsDemoDataMode(!isDemoDataMode)}
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition flex items-center gap-1.5 ${
-              isDemoDataMode
-                ? 'bg-amber-100 text-amber-900 border-amber-300 shadow-xs'
-                : 'bg-slate-100 text-slate-600 border-slate-200 hover:text-slate-900'
-            }`}
-          >
-            <Database className="w-3.5 h-3.5 text-amber-600" />
-            {isDemoDataMode ? 'Demo Data Mode: ON' : 'Demo Data Mode: OFF'}
-          </button>
-
           {/* Navigation Sub-Tabs */}
           <div className="bg-slate-100 p-1 rounded-xl border border-slate-200 inline-flex items-center gap-1">
             <button
@@ -369,20 +272,6 @@ export const FinderView: React.FC<FinderViewProps> = ({
           </div>
         </div>
       </div>
-
-      {isDemoDataMode && (
-        <div className="bg-amber-50 border border-amber-200 p-3.5 rounded-xl text-amber-900 text-xs flex items-center justify-between shadow-xs">
-          <div className="flex items-center gap-2">
-            <Database className="w-4 h-4 text-amber-600 shrink-0" />
-            <span>
-              <strong>DEMO DATA MODE ACTIVE:</strong> Showing sample test records for demonstration purposes. Live API calls are paused.
-            </span>
-          </div>
-          <span className="px-2 py-0.5 bg-amber-200 text-amber-900 font-extrabold text-[10px] rounded uppercase tracking-wider">
-            DEMO DATA
-          </span>
-        </div>
-      )}
 
       {activeSubTab === 'ai_discovery' && (
         <>
@@ -474,7 +363,7 @@ export const FinderView: React.FC<FinderViewProps> = ({
 
               <button
                 onClick={handleSearch}
-                disabled={loading || isDemoDataMode}
+                disabled={loading}
                 className="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-sm transition"
               >
                 {loading ? (
@@ -491,7 +380,7 @@ export const FinderView: React.FC<FinderViewProps> = ({
           </div>
 
           {/* API Error / Provider Not Configured Alert */}
-          {apiError && !isDemoDataMode && (
+          {apiError && (
             <div className="bg-rose-50 border border-rose-200 rounded-2xl p-5 space-y-3">
               <div className="flex items-start gap-3 text-rose-900">
                 <ShieldAlert className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
@@ -515,20 +404,14 @@ export const FinderView: React.FC<FinderViewProps> = ({
                   onClick={handleSearch}
                   className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-lg transition inline-flex items-center gap-1.5 shadow-xs"
                 >
-                  <RefreshCw className="w-3.5 h-3.5" /> Retry Provider
-                </button>
-                <button
-                  onClick={() => setIsDemoDataMode(true)}
-                  className="px-3.5 py-1.5 bg-white border border-rose-300 text-rose-800 font-bold text-xs rounded-lg hover:bg-rose-100 transition inline-flex items-center gap-1.5"
-                >
-                  <Database className="w-3.5 h-3.5 text-amber-600" /> Enable Demo Data Mode
+                  <RefreshCw className="w-3.5 h-3.5" /> Retry Search
                 </button>
               </div>
             </div>
           )}
 
           {/* Search Session Statistics Summary Bar */}
-          {searchSummary && !isDemoDataMode && (
+          {searchSummary && (
             <div className="bg-slate-900 text-white p-4 rounded-2xl border border-slate-800 shadow-md flex flex-wrap items-center justify-between gap-4 text-xs">
               <div className="flex items-center gap-2 font-bold text-indigo-300">
                 <Sparkles className="w-4 h-4 text-indigo-400" /> Discovery Pipeline Execution Summary:
@@ -546,17 +429,12 @@ export const FinderView: React.FC<FinderViewProps> = ({
             </div>
           )}
 
-          {/* Discovered Leads List */}
-          {(isDemoDataMode ? sampleDemoLeads : discoveredLeads).length > 0 && (
+          {/* Discovered Leads List or Empty State */}
+          {discoveredLeads.length > 0 ? (
             <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
               <div className="p-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
                 <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
-                  Discovered Opportunities ({(isDemoDataMode ? sampleDemoLeads : discoveredLeads).length})
-                  {isDemoDataMode && (
-                    <span className="px-2 py-0.5 bg-amber-100 text-amber-800 text-[10px] font-extrabold rounded border border-amber-300">
-                      DEMO DATA
-                    </span>
-                  )}
+                  Discovered Opportunities ({discoveredLeads.length})
                 </h3>
                 <span className="text-xs text-slate-500 font-medium">
                   Filtered against suppression list & active database
@@ -564,7 +442,7 @@ export const FinderView: React.FC<FinderViewProps> = ({
               </div>
 
               <div className="divide-y divide-slate-200">
-                {(isDemoDataMode ? sampleDemoLeads : discoveredLeads).map((item, idx) => {
+                {discoveredLeads.map((item, idx) => {
                   const isImported = importedIds[idx];
                   const scoreData = calculateExplainableScore(item);
                   const valueData = estimateProjectValue(item);
@@ -678,6 +556,16 @@ export const FinderView: React.FC<FinderViewProps> = ({
                 })}
               </div>
             </div>
+          ) : (
+            !loading && !apiError && (
+              <div className="bg-white border border-slate-200 rounded-2xl p-8 text-center space-y-3">
+                <Sparkles className="w-10 h-10 text-indigo-500 mx-auto" />
+                <h4 className="font-extrabold text-slate-900 text-base">Live Lead Discovery Ready</h4>
+                <p className="text-xs text-slate-500 max-w-md mx-auto">
+                  Select your discovery parameters (Country, Industry, City, Opportunity Type) and click <strong>Run Verified Client Search</strong> to fetch live prospects from your connected Live Data Provider.
+                </p>
+              </div>
+            )
           )}
         </>
       )}
@@ -694,30 +582,12 @@ export const FinderView: React.FC<FinderViewProps> = ({
             </p>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {sampleJobOpportunities.map((job, jIdx) => (
-              <div key={jIdx} className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-3">
-                <div className="flex items-start justify-between gap-2">
-                  <div>
-                    <h4 className="font-extrabold text-slate-900 text-sm">{job.role}</h4>
-                    <p className="text-xs font-semibold text-indigo-600">{job.company} • {job.location}</p>
-                  </div>
-                  <span className="px-2.5 py-1 bg-emerald-50 text-emerald-700 font-bold text-xs rounded-full border border-emerald-200 shrink-0">
-                    {job.budget}
-                  </span>
-                </div>
-
-                <p className="text-xs text-slate-600 leading-relaxed">{job.description}</p>
-
-                <div className="flex flex-wrap gap-1.5 pt-1">
-                  {job.skills.map((s, sKey) => (
-                    <span key={sKey} className="px-2 py-0.5 bg-slate-100 text-slate-700 font-semibold text-[10px] rounded-md border border-slate-200">
-                      {s}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            ))}
+          <div className="bg-white border border-slate-200 rounded-2xl p-8 text-center space-y-3">
+            <Briefcase className="w-10 h-10 text-indigo-500 mx-auto" />
+            <h4 className="font-extrabold text-slate-900 text-base">Live Jobs & Contracts Pipeline Active</h4>
+            <p className="text-xs text-slate-500 max-w-md mx-auto">
+              Use the Client Projects search above or LinkedIn Prospector to find active clients, agencies, and contract opportunities for your developer profile.
+            </p>
           </div>
         </div>
       )}

@@ -652,23 +652,27 @@ export const CleanupCenterView: React.FC<CleanupCenterViewProps> = ({
               <h3 className="font-extrabold text-base text-white">Demo & Sample Data Isolation</h3>
             </div>
             <p className="text-xs text-slate-300 leading-relaxed">
-              Your database currently contains {demoLeads.length} sample/demo records designed for testing. You can safely purge all demo records to work exclusively with real verified prospects.
+              {demoLeads.length > 0
+                ? `Your database currently contains ${demoLeads.length} sample/demo records. You can safely purge all demo records to work exclusively with real verified prospects.`
+                : 'Workspace clean: 0 demo or sample records found. All active records in your database are verified user prospects.'}
             </p>
 
-            <button
-              onClick={() => {
-                setConfirmModalState({
-                  isOpen: true,
-                  title: 'Delete All Demo Records?',
-                  message: `Permanently purge all ${demoLeads.length} sample records from the workspace? Verified custom leads will remain unaffected.`,
-                  action: onDeleteAllDemoData,
-                  type: 'danger',
-                });
-              }}
-              className="px-4 py-2.5 bg-rose-600 hover:bg-rose-500 text-white font-extrabold text-xs rounded-xl transition flex items-center gap-2 shadow-lg shadow-rose-600/20"
-            >
-              <Trash2 className="w-4 h-4" /> DELETE ALL DEMO DATA ({demoLeads.length} Records)
-            </button>
+            {demoLeads.length > 0 && (
+              <button
+                onClick={() => {
+                  setConfirmModalState({
+                    isOpen: true,
+                    title: 'Delete All Demo Records?',
+                    message: `Permanently purge all ${demoLeads.length} sample records from the workspace? Verified custom leads will remain unaffected.`,
+                    action: onDeleteAllDemoData,
+                    type: 'danger',
+                  });
+                }}
+                className="px-4 py-2.5 bg-rose-600 hover:bg-rose-500 text-white font-extrabold text-xs rounded-xl transition flex items-center gap-2 shadow-lg shadow-rose-600/20"
+              >
+                <Trash2 className="w-4 h-4" /> DELETE ALL DEMO DATA ({demoLeads.length} Records)
+              </button>
+            )}
           </div>
         </div>
       )}

@@ -204,21 +204,21 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       {/* Database Reset Section */}
       <div className="bg-rose-50 border border-rose-200 p-5 rounded-xl space-y-2 text-rose-900">
         <h3 className="font-bold text-base text-rose-950 flex items-center gap-2">
-          <RotateCcw className="w-4 h-4 text-rose-600" /> Reset Lead Database
+          <RotateCcw className="w-4 h-4 text-rose-600" /> Clear Lead Database
         </h3>
         <p className="text-xs text-rose-700">
-          Re-populates the application with initial pre-qualified client leads and sample outreach logs.
+          Wipes all saved leads, outreach logs, and scheduled messages to start fresh with a clean database.
         </p>
         <button
           type="button"
           onClick={() => {
-            if (confirm('Are you sure you want to reset all leads to initial sample dataset?')) {
+            if (confirm('Are you sure you want to clear all data and start with an empty database?')) {
               onResetData();
             }
           }}
           className="mt-2 px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white font-semibold text-xs rounded-lg shadow-sm transition"
         >
-          Reset to Sample Data
+          Clear Workspace Database
         </button>
       </div>
     </div>

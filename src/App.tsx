@@ -61,11 +61,12 @@ export default function App() {
       try {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
+          const filtered = parsed.filter(item => !item.isDemo && !item.id?.startsWith('lead-'));
           const seen = new Set<string>();
-          return parsed.map((item, idx) => {
+          return filtered.map((item, idx) => {
             let id = item.id;
             if (!id || seen.has(id)) {
-              id = `lead-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 8)}`;
+              id = `custom-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 8)}`;
             }
             seen.add(id);
             return { ...item, id };
@@ -80,7 +81,12 @@ export default function App() {
   const [outreachLogs, setOutreachLogs] = useState<OutreachLog[]>(() => {
     const saved = localStorage.getItem('leadflow_outreach');
     if (saved) {
-      try { return JSON.parse(saved); } catch (e) { /* ignore */ }
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          return parsed.filter(item => !item.id?.startsWith('log-'));
+        }
+      } catch (e) { /* ignore */ }
     }
     return INITIAL_OUTREACH_LOGS;
   });
@@ -89,7 +95,12 @@ export default function App() {
   const [inboundReplies, setInboundReplies] = useState<InboundReply[]>(() => {
     const saved = localStorage.getItem('leadflow_replies');
     if (saved) {
-      try { return JSON.parse(saved); } catch (e) { /* ignore */ }
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          return parsed.filter(item => !item.id?.startsWith('reply-'));
+        }
+      } catch (e) { /* ignore */ }
     }
     return INITIAL_INBOUND_REPLIES;
   });
@@ -98,7 +109,12 @@ export default function App() {
   const [scheduledEmails, setScheduledEmails] = useState<ScheduledEmail[]>(() => {
     const saved = localStorage.getItem('leadflow_scheduled');
     if (saved) {
-      try { return JSON.parse(saved); } catch (e) { /* ignore */ }
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          return parsed.filter(item => !item.id?.startsWith('sched-'));
+        }
+      } catch (e) { /* ignore */ }
     }
     return INITIAL_SCHEDULED_EMAILS;
   });
@@ -732,11 +748,15 @@ export default function App() {
   };
 
   const handleResetData = () => {
-    setLeads(INITIAL_LEADS);
-    setOutreachLogs(INITIAL_OUTREACH_LOGS);
+    setLeads([]);
+    setOutreachLogs([]);
+    setInboundReplies([]);
+    setScheduledEmails([]);
     localStorage.removeItem('leadflow_leads');
     localStorage.removeItem('leadflow_outreach');
-    alert('Database successfully reset to initial sample leads dataset!');
+    localStorage.removeItem('leadflow_replies');
+    localStorage.removeItem('leadflow_scheduled');
+    alert('Database successfully cleared. All sample and demo records have been removed.');
   };
 
   return (
@@ -885,7 +905,7 @@ export default function App() {
               setIsEmailModalOpen(true);
             }}
             suppressedRecords={suppressedRecords}
-            onSuppressLead={(lead) => handleSuppressLead(lead, 'Suppressed from discovery')}
+            onSuppressLead={(lead) => handleSuppressLead(lead, 'Other')}
           />
         )}
 
