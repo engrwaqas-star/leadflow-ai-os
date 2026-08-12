@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Search, 
   Sparkles, 
@@ -25,7 +25,9 @@ import {
   Eye,
   Info,
   Filter,
-  Check
+  Check,
+  Activity,
+  Sliders
 } from 'lucide-react';
 import { Lead, SuppressedDomainRecord } from '../types';
 import { loggedFetch } from '../utils/apiLogger';
@@ -37,6 +39,7 @@ import {
   ScoreBreakdown,
   ValueEstimate
 } from '../utils/leadPipeline';
+import { DataSourceConfigModal } from './DataSourceConfigModal';
 
 interface FinderViewProps {
   onImportLead: (lead: Omit<Lead, 'id' | 'createdAt'>) => void;
@@ -64,9 +67,11 @@ export const FinderView: React.FC<FinderViewProps> = ({
   const [budgetTarget, setBudgetTarget] = useState('$2,000+ Target');
   const [technology, setTechnology] = useState('React / JavaScript');
   const [keyword, setKeyword] = useState('');
+  const [selectedProviderId, setSelectedProviderId] = useState('serpapi-search');
 
   const [loading, setLoading] = useState(false);
   const [discoveredLeads, setDiscoveredLeads] = useState<any[]>([]);
+  const [hasExecutedSearch, setHasExecutedSearch] = useState(false);
   const [searchSummary, setSearchSummary] = useState<{
     rawCount: number;
     newCount: number;
@@ -78,7 +83,11 @@ export const FinderView: React.FC<FinderViewProps> = ({
   const [importedIds, setImportedIds] = useState<Record<string, boolean>>({});
   const [apiError, setApiError] = useState<{ message: string; code?: string } | null>(null);
 
-  // Parameterized Search Cache (Key: country|city|industry|oppType|budget)
+  // Data Source Provider Config Modal
+  const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
+  const [providerHealth, setProviderHealth] = useState<any>(null);
+
+  // Parameterized Search Cache (Key: country|city|industry|oppType|budget|keyword)
   const [searchCache, setSearchCache] = useState<Record<string, { leads: any[]; summary: any }>>({});
 
   // Modal States
@@ -94,13 +103,25 @@ export const FinderView: React.FC<FinderViewProps> = ({
   const [importedProspectIds, setImportedProspectIds] = useState<Record<string, boolean>>({});
   const [prospectorError, setProspectorError] = useState<{ message: string; code?: string } | null>(null);
 
+  const fetchProviderHealth = async () => {
+    const { ok, data } = await loggedFetch(`/api/provider/status?providerId=${selectedProviderId}`);
+    if (ok && data?.health) {
+      setProviderHealth(data.health);
+    }
+  };
+
+  useEffect(() => {
+    fetchProviderHealth();
+  }, [selectedProviderId]);
+
   const handleSearch = async () => {
     setLoading(true);
     setApiError(null);
     setDiscoveredLeads([]);
     setSearchSummary(null);
+    setHasExecutedSearch(true);
 
-    const cacheKey = `${country}|${city.trim().toLowerCase() || 'all'}|${industry}|${opportunityType}|${budgetTarget}`;
+    const cacheKey = `${selectedProviderId}|${country}|${city.trim().toLowerCase() || 'all'}|${industry}|${opportunityType}|${budgetTarget}|${keyword}`;
 
     // Check cache
     if (searchCache[cacheKey]) {
@@ -121,7 +142,8 @@ export const FinderView: React.FC<FinderViewProps> = ({
         companyStage,
         budgetTarget,
         technology,
-        keyword
+        keyword,
+        providerId: selectedProviderId
       }),
     });
 
@@ -138,7 +160,7 @@ export const FinderView: React.FC<FinderViewProps> = ({
           city: item.city || city || 'Local',
           country: item.country || country,
           verificationStatus: item.verificationStatus || 'VERIFIED',
-          source: item.source || 'Live Search Engine',
+          source: item.source || 'Google Live Search Engine',
           sourceUrl: item.sourceUrl || item.website || '',
           evidenceText: item.evidenceText || `Discovered active company in ${item.city || country} with requirement for ${item.suggestedService || 'Web Development'}.`,
         };
@@ -153,7 +175,7 @@ export const FinderView: React.FC<FinderViewProps> = ({
       });
 
       const summary = {
-        rawCount: rawLeads.length,
+        rawCount: data.rawCount || rawLeads.length,
         newCount: validActiveLeads.length,
         duplicateCount,
         suppressedCount,
@@ -163,9 +185,11 @@ export const FinderView: React.FC<FinderViewProps> = ({
       setDiscoveredLeads(validActiveLeads);
       setSearchSummary(summary);
       setSearchCache((prev) => ({ ...prev, [cacheKey]: { leads: validActiveLeads, summary } }));
+      fetchProviderHealth();
     } else {
       const msg = error || data?.error || 'Live lead provider not configured or temporarily unavailable.';
-      setApiError({ message: msg, code });
+      setApiError({ message: msg, code: code || data?.code || 'LIVE_PROVIDER_ERROR' });
+      fetchProviderHealth();
     }
 
     setLoading(false);
@@ -275,6 +299,46 @@ export const FinderView: React.FC<FinderViewProps> = ({
 
       {activeSubTab === 'ai_discovery' && (
         <>
+          {/* Live Data Provider Health Bar */}
+          <div className="bg-slate-900 text-white rounded-2xl p-4 border border-slate-800 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-slate-800 rounded-xl text-indigo-400 border border-slate-700">
+                <Activity className="w-4 h-4" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="font-extrabold text-sm text-white">
+                    {providerHealth?.providerName || 'Google Live Web Search Engine'}
+                  </span>
+                  {providerHealth?.status === 'Connected' ? (
+                    <span className="px-2 py-0.5 bg-emerald-500/20 text-emerald-300 font-bold text-[10px] rounded-full border border-emerald-500/30 flex items-center gap-1">
+                      <CheckCircle2 className="w-3 h-3 text-emerald-400" /> Connected
+                    </span>
+                  ) : providerHealth?.status === 'Rate Limited' ? (
+                    <span className="px-2 py-0.5 bg-amber-500/20 text-amber-300 font-bold text-[10px] rounded-full border border-amber-500/30 flex items-center gap-1">
+                      <AlertTriangle className="w-3 h-3 text-amber-400" /> Rate Limited
+                    </span>
+                  ) : (
+                    <span className="px-2 py-0.5 bg-rose-500/20 text-rose-300 font-bold text-[10px] rounded-full border border-rose-500/30 flex items-center gap-1">
+                      <AlertTriangle className="w-3 h-3 text-rose-400" /> Not Configured
+                    </span>
+                  )}
+                </div>
+                <p className="text-slate-400 text-[11px] mt-0.5">
+                  Live Lead Provider Status • {providerHealth?.lastSuccessfulSearch ? `Last Active: ${new Date(providerHealth.lastSuccessfulSearch).toLocaleTimeString()}` : 'Live Web Index Mode'}
+                </p>
+              </div>
+            </div>
+
+            <button
+              onClick={() => setIsConfigModalOpen(true)}
+              className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-indigo-300 hover:text-white font-bold rounded-xl border border-slate-700 transition inline-flex items-center gap-2 self-start sm:self-auto shrink-0"
+            >
+              <Sliders className="w-3.5 h-3.5" />
+              Data Sources / Provider Config
+            </button>
+          </div>
+
           {/* Filter Form Panel */}
           <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-4">
             <div className="flex items-center justify-between pb-2 border-b border-slate-100">
@@ -286,7 +350,24 @@ export const FinderView: React.FC<FinderViewProps> = ({
               </span>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 uppercase mb-1.5">
+                  Lead Provider
+                </label>
+                <select
+                  value={selectedProviderId}
+                  onChange={(e) => setSelectedProviderId(e.target.value)}
+                  className="w-full bg-indigo-50/70 border border-indigo-200 rounded-xl p-2.5 text-xs text-indigo-950 font-bold focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                >
+                  <option value="serpapi-search">SerpApi Google & Maps (Primary)</option>
+                  <option value="foursquare-places">Foursquare Places API (500 Free)</option>
+                  <option value="yelp-fusion">Yelp Fusion Places API</option>
+                  <option value="google-search-live">Google Live Web Search</option>
+                  <option value="auto-multi">Multi-Source Aggregator (All)</option>
+                </select>
+              </div>
+
               <div>
                 <label className="block text-xs font-semibold text-slate-600 uppercase mb-1.5">
                   Country
@@ -358,7 +439,7 @@ export const FinderView: React.FC<FinderViewProps> = ({
 
             <div className="flex items-center justify-between pt-2">
               <span className="text-xs text-slate-500 font-medium hidden sm:inline">
-                Strict search integrity enforced. Location and lead evidence are never mutated.
+                Strict search integrity enforced. Zero demo data fallback.
               </span>
 
               <button
@@ -368,7 +449,7 @@ export const FinderView: React.FC<FinderViewProps> = ({
               >
                 {loading ? (
                   <>
-                    <Loader2 className="w-4 h-4 animate-spin" /> Querying Discovery Engine...
+                    <Loader2 className="w-4 h-4 animate-spin" /> Querying Live Provider...
                   </>
                 ) : (
                   <>
@@ -386,9 +467,12 @@ export const FinderView: React.FC<FinderViewProps> = ({
                 <ShieldAlert className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
                 <div className="space-y-1">
                   <h4 className="font-extrabold text-sm text-rose-950 uppercase tracking-tight">
-                    LIVE LEAD PROVIDER NOT CONFIGURED
+                    ⚠️ LIVE PROVIDER NOT CONFIGURED
                   </h4>
-                  <p className="text-xs text-rose-800 leading-relaxed">
+                  <p className="text-xs text-rose-800 leading-relaxed font-medium">
+                    Live lead discovery is not connected. Configure a legitimate live lead provider to search real businesses.
+                  </p>
+                  <p className="text-[11px] text-rose-700 font-normal">
                     {apiError.message}
                   </p>
                   {apiError.code && (
@@ -399,10 +483,16 @@ export const FinderView: React.FC<FinderViewProps> = ({
                 </div>
               </div>
 
-              <div className="flex items-center gap-2 pt-2 border-t border-rose-200">
+              <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-rose-200">
+                <button
+                  onClick={() => setIsConfigModalOpen(true)}
+                  className="px-4 py-2 bg-rose-700 hover:bg-rose-800 text-white font-bold text-xs rounded-xl transition inline-flex items-center gap-1.5 shadow-sm"
+                >
+                  <Sliders className="w-3.5 h-3.5" /> Configure Provider
+                </button>
                 <button
                   onClick={handleSearch}
-                  className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-lg transition inline-flex items-center gap-1.5 shadow-xs"
+                  className="px-4 py-2 bg-white hover:bg-slate-100 text-rose-800 border border-rose-300 font-bold text-xs rounded-xl transition inline-flex items-center gap-1.5"
                 >
                   <RefreshCw className="w-3.5 h-3.5" /> Retry Search
                 </button>
@@ -414,13 +504,13 @@ export const FinderView: React.FC<FinderViewProps> = ({
           {searchSummary && (
             <div className="bg-slate-900 text-white p-4 rounded-2xl border border-slate-800 shadow-md flex flex-wrap items-center justify-between gap-4 text-xs">
               <div className="flex items-center gap-2 font-bold text-indigo-300">
-                <Sparkles className="w-4 h-4 text-indigo-400" /> Discovery Pipeline Execution Summary:
+                <Sparkles className="w-4 h-4 text-indigo-400" /> Discovery Pipeline Metrics:
               </div>
 
               <div className="flex items-center gap-4 text-slate-300 font-semibold">
-                <span>Candidates Found: <strong className="text-white">{searchSummary.rawCount}</strong></span>
+                <span>Raw Candidates: <strong className="text-white">{searchSummary.rawCount}</strong></span>
                 <span>•</span>
-                <span>New Verified: <strong className="text-emerald-400">{searchSummary.newCount}</strong></span>
+                <span>Validated Active: <strong className="text-emerald-400">{searchSummary.newCount}</strong></span>
                 <span>•</span>
                 <span>Duplicates Filtered: <strong className="text-amber-400">{searchSummary.duplicateCount}</strong></span>
                 <span>•</span>
@@ -460,10 +550,17 @@ export const FinderView: React.FC<FinderViewProps> = ({
                             </h4>
 
                             {/* Verification Badge */}
-                            <span className="px-2 py-0.5 bg-emerald-50 text-emerald-800 font-bold text-[10px] rounded-full border border-emerald-200 flex items-center gap-1">
-                              <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                              VERIFIED
-                            </span>
+                            {item.verificationStatus === 'UNVERIFIED' ? (
+                              <span className="px-2 py-0.5 bg-amber-50 text-amber-800 font-bold text-[10px] rounded-full border border-amber-200 flex items-center gap-1">
+                                <AlertTriangle className="w-3 h-3 text-amber-600" />
+                                UNVERIFIED
+                              </span>
+                            ) : (
+                              <span className="px-2 py-0.5 bg-emerald-50 text-emerald-800 font-bold text-[10px] rounded-full border border-emerald-200 flex items-center gap-1">
+                                <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                VERIFIED
+                              </span>
+                            )}
 
                             {/* Skill Match Badge */}
                             {scoreData.skillMatchStatus === 'SKILL_GAP' ? (
@@ -489,10 +586,28 @@ export const FinderView: React.FC<FinderViewProps> = ({
                               href={item.website?.startsWith('http') ? item.website : `https://${item.website}`}
                               target="_blank"
                               rel="noopener noreferrer"
-                              className="text-indigo-600 hover:underline flex items-center gap-1"
+                              className="text-indigo-600 hover:underline flex items-center gap-1 font-semibold"
                             >
                               {item.website} <ExternalLink className="w-3 h-3" />
                             </a>
+                          </div>
+
+                          {/* Source & Source URL */}
+                          <div className="text-[11px] text-slate-500 font-medium flex items-center gap-3 pt-0.5">
+                            <span>Source Provider: <strong className="text-slate-800">{item.source || 'Google Live Search Provider'}</strong></span>
+                            {item.sourceUrl && (
+                              <>
+                                <span>•</span>
+                                <a
+                                  href={item.sourceUrl.startsWith('http') ? item.sourceUrl : `https://${item.sourceUrl}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-slate-600 hover:text-indigo-600 flex items-center gap-1 font-mono text-[10px]"
+                                >
+                                  [Source Listing] <ExternalLink className="w-2.5 h-2.5" />
+                                </a>
+                              </>
+                            )}
                           </div>
 
                           <p className="text-xs text-slate-600 bg-slate-100 p-2.5 rounded-xl border border-slate-200/80">
@@ -557,15 +672,30 @@ export const FinderView: React.FC<FinderViewProps> = ({
               </div>
             </div>
           ) : (
-            !loading && !apiError && (
+            hasExecutedSearch && !loading && !apiError && (
               <div className="bg-white border border-slate-200 rounded-2xl p-8 text-center space-y-3">
-                <Sparkles className="w-10 h-10 text-indigo-500 mx-auto" />
-                <h4 className="font-extrabold text-slate-900 text-base">Live Lead Discovery Ready</h4>
-                <p className="text-xs text-slate-500 max-w-md mx-auto">
-                  Select your discovery parameters (Country, Industry, City, Opportunity Type) and click <strong>Run Verified Client Search</strong> to fetch live prospects from your connected Live Data Provider.
+                <div className="w-12 h-12 bg-amber-50 text-amber-600 rounded-2xl flex items-center justify-center mx-auto border border-amber-200">
+                  <Database className="w-6 h-6" />
+                </div>
+                <h4 className="font-extrabold text-slate-900 text-base">No verified live leads found</h4>
+                <p className="text-xs text-slate-600 max-w-md mx-auto leading-relaxed">
+                  No live businesses matching <strong>{country} → {city || "All Cities"} → {industry}</strong> were returned by the connected provider.
                 </p>
+                <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-[11px] text-slate-500 max-w-md mx-auto font-medium">
+                  Zero fake leads or fallback demo records were substituted. Configure your provider or adjust location parameters to retry.
+                </div>
               </div>
             )
+          )}
+
+          {!hasExecutedSearch && !loading && !apiError && (
+            <div className="bg-white border border-slate-200 rounded-2xl p-8 text-center space-y-3">
+              <Sparkles className="w-10 h-10 text-indigo-500 mx-auto" />
+              <h4 className="font-extrabold text-slate-900 text-base">Live Lead Discovery Engine Ready</h4>
+              <p className="text-xs text-slate-500 max-w-md mx-auto">
+                Select your discovery parameters (Country, Industry, City, Opportunity Type) and click <strong>Run Verified Client Search</strong> to fetch live prospects from your connected Live Data Provider.
+              </p>
+            </div>
           )}
         </>
       )}
@@ -812,6 +942,17 @@ export const FinderView: React.FC<FinderViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* DATA SOURCE CONFIG & HEALTH MODAL */}
+      <DataSourceConfigModal
+        isOpen={isConfigModalOpen}
+        onClose={() => setIsConfigModalOpen(false)}
+        currentProviderId={selectedProviderId}
+        onSelectProvider={(id) => setSelectedProviderId(id)}
+        onConfigSaved={() => {
+          fetchProviderHealth();
+        }}
+      />
     </div>
   );
 };

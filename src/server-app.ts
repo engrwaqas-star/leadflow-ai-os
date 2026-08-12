@@ -1,6 +1,11 @@
 import express, { Request, Response } from "express";
 import { GoogleGenAI, Type } from "@google/genai";
-import { getLiveDataProvider } from "./providers/LiveDataProvider";
+import { 
+  getLiveDataProvider, 
+  getProviderHealth, 
+  getAllProvidersHealth, 
+  updateProviderHealth 
+} from "./providers/LiveDataProvider";
 
 export const app = express();
 
@@ -69,36 +74,105 @@ app.get("/api/health", (req: Request, res: Response) => {
   });
 });
 
+// Data Source Provider Health Endpoint
+app.get("/api/provider/status", (req: Request, res: Response) => {
+  const providerId = (req.query.providerId as string) || "google-search-live";
+  const health = getProviderHealth(providerId);
+  const allProviders = getAllProvidersHealth();
+  res.json({
+    success: true,
+    health,
+    allProviders,
+  });
+});
+
+// Test Connection Endpoint
+app.post("/api/provider/test-connection", async (req: Request, res: Response) => {
+  try {
+    const { providerId } = req.body;
+    const provider = getLiveDataProvider(providerId);
+    const result = await provider.testConnection();
+    res.status(result.statusCode).json({
+      success: result.success,
+      statusCode: result.statusCode,
+      message: result.message,
+      provider: provider.name,
+      providerId: provider.id,
+      details: result.details,
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      success: false,
+      statusCode: 500,
+      message: err.message || "Failed to test live lead provider connection",
+      code: "TEST_CONNECTION_FAILED",
+    });
+  }
+});
+
+// Save / Test Provider Configuration Endpoint
+app.post("/api/provider/config", async (req: Request, res: Response) => {
+  try {
+    const { apiKey, providerId, foursquareKey, serpapiKey, yelpKey } = req.body;
+    
+    if (apiKey) {
+      process.env.GEMINI_API_KEY = apiKey.trim();
+    }
+    if (foursquareKey) {
+      process.env.FOURSQUARE_API_KEY = foursquareKey.trim();
+    }
+    if (serpapiKey) {
+      process.env.SERPAPI_API_KEY = serpapiKey.trim();
+    }
+    if (yelpKey) {
+      process.env.YELP_API_KEY = yelpKey.trim();
+    }
+
+    const provider = getLiveDataProvider(providerId);
+    const testResult = await provider.testConnection();
+
+    res.status(testResult.statusCode).json({
+      success: testResult.success,
+      statusCode: testResult.statusCode,
+      message: testResult.message,
+      provider: provider.name,
+      health: getProviderHealth(provider.id),
+      allProviders: getAllProvidersHealth(),
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      success: false,
+      statusCode: 500,
+      message: err.message || "Failed to save provider config",
+    });
+  }
+});
+
 // 2. AI Lead Discovery (Provider-Agnostic Interface)
 app.post("/api/ai/find-clients", async (req: Request, res: Response) => {
   try {
-    const { country, industry, city, opportunityType, budgetTarget } = req.body;
-    const provider = getLiveDataProvider();
+    const { country, industry, city, opportunityType, budgetTarget, keyword, providerId } = req.body;
+    const provider = getLiveDataProvider(providerId);
 
     if (!provider.isConfigured()) {
       return res.status(503).json({
         success: false,
-        error: "Live lead provider not configured. Please connect an active live data provider or API key in environment settings.",
+        error: `Live lead provider (${provider.name}) is not connected. Configure provider credentials or select another active provider.`,
         code: "LIVE_PROVIDER_NOT_CONFIGURED",
+        provider: provider.name,
         leads: [],
       });
     }
 
-    const result = await provider.fetchLeads({ country, industry, city, opportunityType, budgetTarget });
+    const result = await provider.searchBusinesses({ country, industry, city, opportunityType, budgetTarget, keyword, providerId });
 
     if (!result.success) {
-      if (result.code === "LIVE_PROVIDER_NOT_CONFIGURED") {
-        return res.status(503).json({
-          success: false,
-          error: result.error || "Live lead provider not configured",
-          code: "LIVE_PROVIDER_NOT_CONFIGURED",
-          leads: [],
-        });
-      }
-      return res.status(500).json({
+      const statusCode = result.statusCode || 500;
+      return res.status(statusCode).json({
         success: false,
         error: result.error || "Failed to fetch leads from live provider",
         code: result.code || "LIVE_PROVIDER_FETCH_ERROR",
+        provider: result.provider,
         leads: [],
       });
     }
@@ -107,13 +181,14 @@ app.post("/api/ai/find-clients", async (req: Request, res: Response) => {
       success: true,
       leads: result.leads || [],
       provider: result.provider,
-      query: { country, industry, city, opportunityType, budgetTarget },
+      query: { country, industry, city, opportunityType, budgetTarget, keyword, providerId: provider.id },
+      rawCount: result.rawCount || (result.leads ? result.leads.length : 0),
     });
   } catch (err: any) {
     if (err?.code === "API_KEY_MISSING" || err?.code === "LIVE_PROVIDER_NOT_CONFIGURED") {
       return res.status(503).json({
         success: false,
-        error: "Live lead provider not configured. Please connect an active live data provider or API key in environment settings.",
+        error: "Live lead discovery is not connected. Configure a legitimate live lead provider to search real businesses.",
         code: "LIVE_PROVIDER_NOT_CONFIGURED",
         leads: [],
       });
