@@ -19,7 +19,9 @@ import {
   X,
   Sparkles,
   ExternalLink,
-  Activity
+  Activity,
+  Trash2,
+  ShieldAlert
 } from 'lucide-react';
 import { UserProfile } from '../types';
 
@@ -92,6 +94,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
     {
       title: 'SYSTEM',
       items: [
+        { id: 'data_sources', label: 'Data Sources Health', icon: Globe },
+        { id: 'ai_status', label: 'AI Status Monitor', icon: Activity },
+        { id: 'cleanup', label: 'Data Cleanup Center', icon: Trash2, isSpecial: true, tag: 'Clean' },
         { id: 'analytics', label: 'Analytics', icon: BarChart3 },
         { id: 'settings', label: 'API & Settings', icon: Settings },
       ],

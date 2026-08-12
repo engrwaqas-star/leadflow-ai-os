@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { X, Sparkles, Loader2 } from 'lucide-react';
+import { X, Sparkles, Loader2, ShieldAlert } from 'lucide-react';
 import { Lead, Temperature, ContactStatus } from '../types';
+import { loggedFetch } from '../utils/apiLogger';
 
 interface LeadModalProps {
   isOpen: boolean;
@@ -32,6 +33,7 @@ export const LeadModal: React.FC<LeadModalProps> = ({
   const [pitchHook, setPitchHook] = useState('');
   const [notes, setNotes] = useState('');
   const [auditing, setAuditing] = useState(false);
+  const [auditError, setAuditError] = useState<string | null>(null);
 
   useEffect(() => {
     if (initialLead) {
@@ -76,9 +78,10 @@ export const LeadModal: React.FC<LeadModalProps> = ({
   const handleRunAiAudit = async () => {
     if (!businessName) return alert('Please enter a Business Name first.');
     setAuditing(true);
+    setAuditError(null);
 
     try {
-      const res = await fetch('/api/ai/audit-lead', {
+      const { ok, data, error } = await loggedFetch('/api/ai/audit-lead', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -89,8 +92,8 @@ export const LeadModal: React.FC<LeadModalProps> = ({
           notes,
         }),
       });
-      const data = await res.json();
-      if (data.success && data.audit) {
+
+      if (ok && data?.success && data.audit) {
         setScore(data.audit.score || 85);
         setTemperature(data.audit.temperature || 'WARM');
         setWebsiteStatus(data.audit.auditStatus || 'Audited by Gemini');
@@ -99,15 +102,11 @@ export const LeadModal: React.FC<LeadModalProps> = ({
           setAuditIssue(data.audit.auditIssues.join('; '));
         }
         setPitchHook(data.audit.pitchHook || '');
+      } else {
+        setAuditError(error || data?.error || 'Audit service unavailable.');
       }
-    } catch (err) {
-      console.warn('Fallback audit simulation:', err);
-      setScore(88);
-      setTemperature('WARM');
-      setWebsiteStatus('Missing Mobile Responsive CTA');
-      setSuggestedService('Next.js Mobile Redesign & Direct Scheduling');
-      setAuditIssue('Page load speed > 3.8s on mobile networks; no direct appointment form.');
-      setPitchHook(`I noticed ${businessName}'s site lacks a mobile 1-click booking button.`);
+    } catch (err: any) {
+      setAuditError(err.message || 'Failed to run AI audit');
     } finally {
       setAuditing(false);
     }

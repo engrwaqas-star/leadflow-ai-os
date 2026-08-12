@@ -14,8 +14,10 @@ import {
   ChevronRight,
   ListPlus,
   Zap,
+  AlertTriangle,
 } from 'lucide-react';
 import { Lead, UserProfile, EmailTemplate } from '../types';
+import { loggedFetch } from '../utils/apiLogger';
 
 interface EmailModalProps {
   isOpen: boolean;
@@ -75,6 +77,7 @@ export const EmailModal: React.FC<EmailModalProps> = ({
 
   // GoFullPage Screenshot Attachments State
   const [uploadedScreenshots, setUploadedScreenshots] = useState<{ id: string; name: string; url: string }[]>([]);
+  const [genError, setGenError] = useState<{ message: string; code?: string } | null>(null);
 
   const handleModalFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files) return;
@@ -160,8 +163,9 @@ export const EmailModal: React.FC<EmailModalProps> = ({
     customPromptInstructions?: string
   ) {
     setGenerating(true);
+    setGenError(null);
     try {
-      const res = await fetch('/api/ai/generate-email', {
+      const { ok, data, error, code } = await loggedFetch('/api/ai/generate-email', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -175,19 +179,16 @@ export const EmailModal: React.FC<EmailModalProps> = ({
           senderTitle: profile.title,
         }),
       });
-      const data = await res.json();
-      if (data.success && data.email) {
+
+      if (ok && data?.success && data.email) {
         setSubject(data.email.subject || '');
         setBody(data.email.body || '');
       } else {
-        throw new Error(data.error || 'Failed');
+        const msg = error || data?.error || 'AI email generation failed.';
+        setGenError({ message: msg, code });
       }
-    } catch (err) {
-      console.warn('Fallback local email draft:', err);
-      setSubject(`Quick observation regarding ${lead.businessName}'s mobile booking`);
-      setBody(
-        `Hi ${lead.contactPerson || 'there'},\n\nI was reviewing local ${lead.industry} businesses in ${lead.city || lead.country} and noticed ${lead.businessName} has fantastic service reviews.\n\nHowever, when visiting ${lead.website} on mobile, ${lead.auditIssue || 'page elements overlap and the contact form breaks'}.\n\nI put together a quick solution for ${lead.businessName} featuring ${lead.suggestedService} to boost client inquiries.\n\nMind if I send over a 2-minute video walkthrough?\n\nBest regards,\n${profile.name}\n${profile.title}`
-      );
+    } catch (err: any) {
+      setGenError({ message: err.message || 'AI service error', code: 'API_ERROR' });
     } finally {
       setGenerating(false);
     }
@@ -197,13 +198,12 @@ export const EmailModal: React.FC<EmailModalProps> = ({
   async function fetchPersonalizedOpenings() {
     setLoadingOpenings(true);
     try {
-      const res = await fetch('/api/ai/personalized-opening', {
+      const { ok, data } = await loggedFetch('/api/ai/personalized-opening', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ lead, senderName: profile.name }),
       });
-      const data = await res.json();
-      if (data.success && data.openings) {
+      if (ok && data?.success && data.openings) {
         setOpenings(data.openings);
       }
     } catch (err) {
@@ -217,13 +217,12 @@ export const EmailModal: React.FC<EmailModalProps> = ({
   async function fetchTalkingPoints() {
     setLoadingPoints(true);
     try {
-      const res = await fetch('/api/ai/talking-points', {
+      const { ok, data } = await loggedFetch('/api/ai/talking-points', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ lead }),
       });
-      const data = await res.json();
-      if (data.success && data.talkingPoints) {
+      if (ok && data?.success && data.talkingPoints) {
         setTalkingPoints(data.talkingPoints);
       }
     } catch (err) {
@@ -353,6 +352,32 @@ export const EmailModal: React.FC<EmailModalProps> = ({
             <span className="text-[10px] bg-amber-200 text-amber-950 px-2 py-0.5 rounded font-extrabold uppercase">
               Replied Status
             </span>
+          </div>
+        )}
+
+        {/* AI GENERATION ERROR DISPLAY */}
+        {genError && (
+          <div className="mb-4 bg-rose-50 border border-rose-200 p-3.5 rounded-xl text-xs text-rose-900 space-y-2">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+              <div>
+                <strong className="block text-rose-950">AI Generation Unavailable</strong>
+                <span>{genError.message}</span>
+                {genError.code && (
+                  <span className="ml-2 px-1.5 py-0.5 bg-rose-200 text-rose-900 text-[10px] rounded font-mono font-bold">
+                    Code: {genError.code}
+                  </span>
+                )}
+              </div>
+            </div>
+            <div className="flex items-center gap-2 pt-1">
+              <button
+                onClick={() => generateAiEmail(strategy, tone, selectedOpening, selectedPoints)}
+                className="px-3 py-1 bg-rose-600 text-white font-bold rounded text-[11px] hover:bg-rose-700 transition"
+              >
+                Retry AI Generation
+              </button>
+            </div>
           </div>
         )}
 

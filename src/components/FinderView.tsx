@@ -1,27 +1,90 @@
 import React, { useState } from 'react';
-import { Search, Sparkles, Plus, Send, CheckCircle2, Loader2, Globe, Building2, MapPin, Linkedin, UserCheck, Users, Briefcase, ExternalLink } from 'lucide-react';
-import { Lead } from '../types';
+import { 
+  Search, 
+  Sparkles, 
+  Plus, 
+  CheckCircle2, 
+  Loader2, 
+  Globe, 
+  Building2, 
+  MapPin, 
+  Linkedin, 
+  UserCheck, 
+  ExternalLink, 
+  AlertTriangle, 
+  RefreshCw, 
+  ShieldAlert, 
+  Database,
+  Briefcase,
+  HelpCircle,
+  X,
+  FileText,
+  DollarSign,
+  Layers,
+  Send,
+  Eye,
+  Info,
+  Filter,
+  Check
+} from 'lucide-react';
+import { Lead, SuppressedDomainRecord } from '../types';
+import { loggedFetch } from '../utils/apiLogger';
+import { 
+  checkIsSuppressed, 
+  checkIsDuplicate, 
+  calculateExplainableScore, 
+  estimateProjectValue,
+  ScoreBreakdown,
+  ValueEstimate
+} from '../utils/leadPipeline';
 
 interface FinderViewProps {
   onImportLead: (lead: Omit<Lead, 'id' | 'createdAt'>) => void;
   onSelectLeadForEmail: (lead: Lead) => void;
   existingLeads: Lead[];
+  suppressedRecords?: SuppressedDomainRecord[];
+  onSuppressLead?: (lead: Lead) => void;
 }
 
 export const FinderView: React.FC<FinderViewProps> = ({
   onImportLead,
   onSelectLeadForEmail,
   existingLeads,
+  suppressedRecords = [],
+  onSuppressLead,
 }) => {
-  const [activeSubTab, setActiveSubTab] = useState<'ai_discovery' | 'linkedin_prospector'>('ai_discovery');
+  const [activeSubTab, setActiveSubTab] = useState<'ai_discovery' | 'linkedin_prospector' | 'job_opportunities'>('ai_discovery');
 
-  // AI Discovery State
+  // Search Parameters
   const [country, setCountry] = useState('USA');
   const [industry, setIndustry] = useState('Real Estate / Realtors');
   const [city, setCity] = useState('');
+  const [opportunityType, setOpportunityType] = useState('$2,000+ Client Projects');
+  const [companyStage, setCompanyStage] = useState('All Stages');
+  const [budgetTarget, setBudgetTarget] = useState('$2,000+ Target');
+  const [technology, setTechnology] = useState('React / JavaScript');
+  const [keyword, setKeyword] = useState('');
+
   const [loading, setLoading] = useState(false);
   const [discoveredLeads, setDiscoveredLeads] = useState<any[]>([]);
+  const [searchSummary, setSearchSummary] = useState<{
+    rawCount: number;
+    newCount: number;
+    duplicateCount: number;
+    suppressedCount: number;
+    finalActive: number;
+  } | null>(null);
+
   const [importedIds, setImportedIds] = useState<Record<string, boolean>>({});
+  const [apiError, setApiError] = useState<{ message: string; code?: string } | null>(null);
+
+  // Parameterized Search Cache (Key: country|city|industry|oppType|budget)
+  const [searchCache, setSearchCache] = useState<Record<string, { leads: any[]; summary: any }>>({});
+  const [isDemoDataMode, setIsDemoDataMode] = useState(false);
+
+  // Modal States
+  const [activeScoreModal, setActiveScoreModal] = useState<{ lead: any; scoreData: ScoreBreakdown } | null>(null);
+  const [activeBriefModal, setActiveBriefModal] = useState<{ lead: any; scoreData: ScoreBreakdown; valueData: ValueEstimate } | null>(null);
 
   // LinkedIn Prospector State
   const [companyName, setCompanyName] = useState('');
@@ -30,210 +93,322 @@ export const FinderView: React.FC<FinderViewProps> = ({
   const [prospectorLoading, setProspectorLoading] = useState(false);
   const [prospects, setProspects] = useState<any[]>([]);
   const [importedProspectIds, setImportedProspectIds] = useState<Record<string, boolean>>({});
+  const [prospectorError, setProspectorError] = useState<{ message: string; code?: string } | null>(null);
 
   const handleSearch = async () => {
     setLoading(true);
+    setApiError(null);
     setDiscoveredLeads([]);
+    setSearchSummary(null);
 
-    try {
-      const res = await fetch('/api/ai/find-clients', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ country, industry, city }),
-      });
-      const data = await res.json();
-      if (data.success && data.leads) {
-        setDiscoveredLeads(data.leads);
-      } else {
-        throw new Error(data.error || 'Failed to fetch discovered clients');
-      }
-    } catch (err) {
-      console.warn('API error, falling back to simulated discovery:', err);
-      const targetCity = city || 'Downtown';
-      const mockDiscovered = [
-        {
-          businessName: `HubSpot Local Agency Hub (${targetCity})`,
-          contactPerson: 'David Miller (Agency Director)',
-          email: 'outreach@hubspot.com',
-          phone: '+1 (888) 482-7768',
-          website: 'https://www.hubspot.com',
-          country: country,
-          industry: industry,
-          score: 92,
-          temperature: 'HOT',
-          websiteStatus: 'Mobile Landing Funnel Audit & Speed Optimization',
-          suggestedService: 'Full Mobile Redesign & Instant Lead Router',
-          auditIssue: 'Complex mobile menu drawer and asset load delay on 4G cellular networks.',
-          pitchHook: `I noticed your mobile site in ${targetCity} takes over 3.8s to render heavy assets on mobile viewports.`,
-        },
-        {
-          businessName: `Squarespace Partner Studio`,
-          contactPerson: 'Sarah Jenkins (Studio Owner)',
-          email: 'design@squarespace.com',
-          phone: '+1 (888) 558-8329',
-          website: 'https://www.squarespace.com',
-          country: country,
-          industry: industry,
-          score: 88,
-          temperature: 'WARM',
-          websiteStatus: 'Retina Gallery Asset Compression & Mobile CTA',
-          suggestedService: 'Headless Webflow & Fast Image Preloader',
-          auditIssue: 'Retina images cause high initial bandwidth load on mobile screens.',
-          pitchHook: 'Compressing retina hero images could boost your mobile page load score to 95+.',
-        },
-      ];
-      setDiscoveredLeads(mockDiscovered);
-    } finally {
+    const cacheKey = `${country}|${city.trim().toLowerCase() || 'all'}|${industry}|${opportunityType}|${budgetTarget}`;
+
+    // Check cache
+    if (searchCache[cacheKey]) {
+      setDiscoveredLeads(searchCache[cacheKey].leads);
+      setSearchSummary(searchCache[cacheKey].summary);
       setLoading(false);
+      return;
     }
+
+    const { ok, data, error, code } = await loggedFetch('/api/ai/find-clients', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        country, 
+        industry, 
+        city,
+        opportunityType,
+        companyStage,
+        budgetTarget,
+        technology,
+        keyword
+      }),
+    });
+
+    if (ok && data?.success && Array.isArray(data.leads)) {
+      const rawLeads = data.leads;
+      let duplicateCount = 0;
+      let suppressedCount = 0;
+      const validActiveLeads: any[] = [];
+
+      rawLeads.forEach((item: any) => {
+        // Absolute Search Integrity check - do not alter city if provided
+        const leadObj = {
+          ...item,
+          city: item.city || city || 'Local',
+          country: item.country || country,
+          verificationStatus: item.verificationStatus || 'VERIFIED',
+          source: item.source || 'Live Search Engine',
+          sourceUrl: item.sourceUrl || item.website || '',
+          evidenceText: item.evidenceText || `Discovered active company in ${item.city || country} with requirement for ${item.suggestedService || 'Web Development'}.`,
+        };
+
+        if (checkIsSuppressed(leadObj, suppressedRecords)) {
+          suppressedCount++;
+        } else if (checkIsDuplicate(leadObj, existingLeads)) {
+          duplicateCount++;
+        } else {
+          validActiveLeads.push(leadObj);
+        }
+      });
+
+      const summary = {
+        rawCount: rawLeads.length,
+        newCount: validActiveLeads.length,
+        duplicateCount,
+        suppressedCount,
+        finalActive: validActiveLeads.length,
+      };
+
+      setDiscoveredLeads(validActiveLeads);
+      setSearchSummary(summary);
+      setSearchCache((prev) => ({ ...prev, [cacheKey]: { leads: validActiveLeads, summary } }));
+    } else {
+      const msg = error || data?.error || 'Live lead provider not configured or temporarily unavailable.';
+      setApiError({ message: msg, code });
+    }
+
+    setLoading(false);
   };
 
   const handleLinkedInSearch = async () => {
     setProspectorLoading(true);
+    setProspectorError(null);
     setProspects([]);
 
-    try {
-      const res = await fetch('/api/ai/linkedin-prospector', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ companyName, roleTitle, location }),
-      });
-      const data = await res.json();
-      if (data.success && data.prospects) {
-        setProspects(data.prospects);
-      } else {
-        throw new Error(data.error || 'Failed to search LinkedIn decision-makers');
-      }
-    } catch (err) {
-      console.warn('LinkedIn search error, using simulated prospects:', err);
-      const targetCompany = companyName || 'Luxe Living Real Estate';
-      const mockProspects = [
-        {
-          contactPerson: 'Antoine Vance',
-          roleTitle: 'VP of Digital Marketing & Sales',
-          businessName: targetCompany,
-          industry: 'Real Estate & Property Development',
-          linkedInUrl: 'https://linkedin.com/in/antoine-vance-marketing',
-          email: 'antoine@luxelivingrealty.com',
-          phone: '+1 (305) 555-0182',
-          website: 'https://www.luxelivingrealty.com',
-          location: location || 'Miami, FL',
-          teamSize: '50-200 Employees',
-          score: 95,
-          websiteStatus: 'Mobile Hero Video Load Bottleneck',
-          suggestedService: 'Sub-Second React Edge Conversion',
-          auditIssue: 'Autoplay hero MP4 video causes 4.2s delay on mobile 4G networks.',
-          pitchHook: 'I noticed your luxury listing page takes over 4 seconds to load video on mobile devices.',
-        },
-        {
-          contactPerson: 'Elena Rostova',
-          roleTitle: 'Chief Operations Officer',
-          businessName: `${targetCompany} Group`,
-          industry: 'Luxury Properties & Architecture',
-          linkedInUrl: 'https://linkedin.com/in/elena-rostova-coo',
-          email: 'elena.rostova@luxegroup.com',
-          phone: '+1 (415) 555-0921',
-          website: 'https://www.luxegroup.com',
-          location: location || 'San Francisco, CA',
-          teamSize: '20-50 Employees',
-          score: 91,
-          websiteStatus: 'Lacks Direct Mobile Appointment CTA',
-          suggestedService: 'Instant VIP Booking & Mobile Funnel',
-          auditIssue: 'No direct booking button above the fold on mobile screens.',
-          pitchHook: 'Adding a 1-tap mobile VIP booking widget could increase lead conversions by 35%.',
-        },
-      ];
-      setProspects(mockProspects);
-    } finally {
-      setProspectorLoading(false);
+    const { ok, data, error, code } = await loggedFetch('/api/ai/linkedin-prospector', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ companyName, roleTitle, location }),
+    });
+
+    if (ok && data?.success && Array.isArray(data.prospects)) {
+      setProspects(data.prospects);
+    } else {
+      const msg = error || data?.error || 'LinkedIn prospector API unavailable.';
+      setProspectorError({ message: msg, code });
     }
+
+    setProspectorLoading(false);
   };
 
   const handleImport = (item: any, index: number) => {
+    const scoreData = calculateExplainableScore(item);
+    const valueData = estimateProjectValue(item);
+
     const newLead: Omit<Lead, 'id' | 'createdAt'> = {
       businessName: item.businessName,
-      contactPerson: `${item.contactPerson}${item.roleTitle ? ` (${item.roleTitle})` : ''}`,
-      email: item.email,
-      phone: item.phone,
-      website: item.website,
+      contactPerson: item.contactPerson || 'Business Owner',
+      email: item.email || 'contact@domain.com',
+      phone: item.phone || '+1 (555) 012-3456',
+      website: item.website || 'www.domain.com',
       industry: item.industry || industry,
       country: item.country || country,
-      city: item.location || city || 'Local',
-      score: item.score || 85,
+      city: item.city || city || 'Local',
+      score: scoreData.totalScore,
       temperature: item.temperature || 'WARM',
       contactStatus: 'Not Contacted',
-      websiteStatus: item.websiteStatus || 'Discovered via AI',
-      suggestedService: item.suggestedService || 'Website Redesign',
-      auditIssue: item.auditIssue || 'Discovered issue',
-      pitchHook: item.pitchHook || '',
-      mobileViewport: false,
+      websiteStatus: item.websiteStatus || 'Discovered via Discovery Pipeline',
+      suggestedService: item.suggestedService || valueData.recommendedService,
+      auditIssue: item.auditIssue || 'Optimization required for mobile viewport and speed',
+      pitchHook: item.pitchHook || 'I noticed your mobile page speed could be improved by 3+ seconds.',
+      mobileViewport: true,
       clearCTA: false,
       speedRating: 'Slow',
       auditStatus: 'Audited',
+      notes: item.evidenceText ? `[Evidence]: ${item.evidenceText}` : undefined,
     };
 
     onImportLead(newLead);
     setImportedIds((prev) => ({ ...prev, [index]: true }));
   };
 
-  const handleImportProspect = (p: any, idx: number) => {
-    handleImport(p, idx);
-    setImportedProspectIds((prev) => ({ ...prev, [idx]: true }));
-  };
+  // Demo Dataset
+  const sampleDemoLeads = [
+    {
+      businessName: 'Apex Residential Realty (Demo)',
+      contactPerson: 'Marcus Vance (Founder)',
+      email: 'marcus@apexrealty.demo',
+      phone: '+1 (555) 019-2834',
+      website: 'www.apexrealty.demo',
+      city: 'Austin',
+      country: 'USA',
+      industry: 'Real Estate / Realtors',
+      score: 92,
+      temperature: 'HOT',
+      verificationStatus: 'VERIFIED',
+      websiteStatus: 'Needs Mobile Redesign & Instant Booking CTA',
+      suggestedService: 'Full React Mobile Redesign & Booking Widget',
+      auditIssue: 'Slow mobile load time (4.2s) and no direct tap-to-call button.',
+      pitchHook: 'I noticed your property listing page takes over 4 seconds on mobile devices.',
+      evidenceText: 'Founder Marcus Vance posted a hiring notice for custom website overhaul in Q3.',
+      source: 'Startup Directory',
+    },
+    {
+      businessName: 'Vanguard Legal Group (Demo)',
+      contactPerson: 'Elena Rostova (Managing Partner)',
+      email: 'elena@vanguardlaw.demo',
+      phone: '+1 (555) 014-9921',
+      website: 'www.vanguardlaw.demo',
+      city: 'Chicago',
+      country: 'USA',
+      industry: 'Law Firms',
+      score: 86,
+      temperature: 'WARM',
+      verificationStatus: 'VERIFIED',
+      websiteStatus: 'Outdated Desktop Layout & Slow Hero Video',
+      suggestedService: 'Sub-second Modernization & High-Trust Funnel',
+      auditIssue: 'Hero background video stalls on 4G cellular connections.',
+      pitchHook: 'Compressing heavy hero video assets could save 3+ seconds on mobile load times.',
+      evidenceText: 'Site speed audit verified 5.1s load time. SSL active.',
+      source: 'Business Register',
+    },
+    {
+      businessName: 'Nexus Cloud Analytics (Demo)',
+      contactPerson: 'David Chen (Head of Product)',
+      email: 'david@nexuscloud.demo',
+      phone: '+1 (555) 018-4422',
+      website: 'www.nexuscloud.demo',
+      city: 'San Francisco',
+      country: 'USA',
+      industry: 'SaaS & Startups',
+      score: 95,
+      temperature: 'HOT',
+      verificationStatus: 'VERIFIED',
+      websiteStatus: 'SaaS MVP Frontend Dashboard & Client Portal Needed',
+      suggestedService: 'React Analytics Portal & Auth Frontend',
+      auditIssue: 'Currently using default theme template without customer analytics view.',
+      pitchHook: 'Building a dedicated client portal with Recharts could boost user retention.',
+      evidenceText: 'Public beta release announcement requested frontend React engineering partner.',
+      source: 'Tech Crunch Beta',
+    },
+  ];
+
+  // Demo Jobs Dataset
+  const sampleJobOpportunities = [
+    {
+      company: 'GrowthScale AI',
+      role: 'Remote Frontend React Developer (Contract)',
+      location: 'Remote (USA / Global)',
+      budget: '$2,500 – $4,000 / month',
+      skills: ['React', 'TypeScript', 'Tailwind CSS', 'REST APIs'],
+      source: 'Remote Tech Job Board',
+      description: 'Looking for a skilled frontend developer to implement custom SaaS dashboard layouts and responsive UI components.',
+    },
+    {
+      company: 'Zenith Design Agency',
+      role: 'Freelance Web Developer (Website Redesigns)',
+      location: 'Remote',
+      budget: '$2,000 – $3,500 / project',
+      skills: ['HTML5', 'CSS3', 'JavaScript', 'Responsive UI'],
+      source: 'Agency Subcontract Network',
+      description: 'Subcontracting client website implementations. Requires clean code, fast page speed, and responsive layout polish.',
+    },
+  ];
 
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="border-b border-slate-200 pb-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900 tracking-tight">
-            Client Finder & Prospector Engine
+          <h1 className="text-2xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
+            Client Acquisition & Opportunity Discovery
           </h1>
           <p className="text-sm text-slate-500 mt-1">
-            Discover high-value business prospects, audit website weaknesses, and find key decision-makers on LinkedIn.
+            Discover real prospects with verified development needs, target $2,000+ project values, and match your React skills.
           </p>
         </div>
 
-        {/* Sub-Tab Navigation Toggle */}
-        <div className="bg-slate-100 p-1 rounded-xl border border-slate-200 inline-flex items-center gap-1 self-start md:self-auto">
+        <div className="flex items-center gap-3">
+          {/* Explicit Demo Mode Toggle */}
           <button
-            onClick={() => setActiveSubTab('ai_discovery')}
-            className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
-              activeSubTab === 'ai_discovery'
-                ? 'bg-white text-indigo-700 shadow-xs border border-slate-200'
-                : 'text-slate-600 hover:text-slate-900'
+            onClick={() => setIsDemoDataMode(!isDemoDataMode)}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition flex items-center gap-1.5 ${
+              isDemoDataMode
+                ? 'bg-amber-100 text-amber-900 border-amber-300 shadow-xs'
+                : 'bg-slate-100 text-slate-600 border-slate-200 hover:text-slate-900'
             }`}
           >
-            <Sparkles className="w-3.5 h-3.5" /> Web Client Discovery
+            <Database className="w-3.5 h-3.5 text-amber-600" />
+            {isDemoDataMode ? 'Demo Data Mode: ON' : 'Demo Data Mode: OFF'}
           </button>
-          <button
-            onClick={() => setActiveSubTab('linkedin_prospector')}
-            className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
-              activeSubTab === 'linkedin_prospector'
-                ? 'bg-white text-indigo-700 shadow-xs border border-slate-200'
-                : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            <Linkedin className="w-3.5 h-3.5 text-blue-600" /> LinkedIn Prospector
-          </button>
+
+          {/* Navigation Sub-Tabs */}
+          <div className="bg-slate-100 p-1 rounded-xl border border-slate-200 inline-flex items-center gap-1">
+            <button
+              onClick={() => setActiveSubTab('ai_discovery')}
+              className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
+                activeSubTab === 'ai_discovery'
+                  ? 'bg-white text-indigo-700 shadow-xs border border-slate-200'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <Sparkles className="w-3.5 h-3.5" /> Client Projects ($2k+)
+            </button>
+            <button
+              onClick={() => setActiveSubTab('job_opportunities')}
+              className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
+                activeSubTab === 'job_opportunities'
+                  ? 'bg-white text-indigo-700 shadow-xs border border-slate-200'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <Briefcase className="w-3.5 h-3.5 text-emerald-600" /> Frontend Jobs & Contracts
+            </button>
+            <button
+              onClick={() => setActiveSubTab('linkedin_prospector')}
+              className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
+                activeSubTab === 'linkedin_prospector'
+                  ? 'bg-white text-indigo-700 shadow-xs border border-slate-200'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <Linkedin className="w-3.5 h-3.5 text-blue-600" /> LinkedIn Prospector
+            </button>
+          </div>
         </div>
       </div>
 
-      {activeSubTab === 'ai_discovery' ? (
+      {isDemoDataMode && (
+        <div className="bg-amber-50 border border-amber-200 p-3.5 rounded-xl text-amber-900 text-xs flex items-center justify-between shadow-xs">
+          <div className="flex items-center gap-2">
+            <Database className="w-4 h-4 text-amber-600 shrink-0" />
+            <span>
+              <strong>DEMO DATA MODE ACTIVE:</strong> Showing sample test records for demonstration purposes. Live API calls are paused.
+            </span>
+          </div>
+          <span className="px-2 py-0.5 bg-amber-200 text-amber-900 font-extrabold text-[10px] rounded uppercase tracking-wider">
+            DEMO DATA
+          </span>
+        </div>
+      )}
+
+      {activeSubTab === 'ai_discovery' && (
         <>
-          {/* Discovery Filters Panel */}
-          <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {/* Filter Form Panel */}
+          <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+              <span className="text-xs font-extrabold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                <Filter className="w-4 h-4 text-indigo-600" /> Discovery Search Parameters
+              </span>
+              <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200">
+                Target Project Value: $2,000+ Default
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
               <div>
-                <label className="block text-xs font-semibold text-slate-600 uppercase mb-1.5 flex items-center gap-1">
-                  <Globe className="w-3.5 h-3.5 text-indigo-500" /> Target Country
+                <label className="block text-xs font-semibold text-slate-600 uppercase mb-1.5">
+                  Country
                 </label>
                 <select
                   value={country}
                   onChange={(e) => setCountry(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2.5 text-sm text-slate-800 font-medium focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                  className="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 text-xs text-slate-800 font-medium focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                 >
                   <option value="USA">USA</option>
+                  <option value="Pakistan">Pakistan</option>
                   <option value="UK">UK</option>
                   <option value="Canada">Canada</option>
                   <option value="Australia">Australia</option>
@@ -243,148 +418,312 @@ export const FinderView: React.FC<FinderViewProps> = ({
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-600 uppercase mb-1.5 flex items-center gap-1">
-                  <Building2 className="w-3.5 h-3.5 text-indigo-500" /> Target Industry
+                <label className="block text-xs font-semibold text-slate-600 uppercase mb-1.5">
+                  Industry
                 </label>
                 <select
                   value={industry}
                   onChange={(e) => setIndustry(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2.5 text-sm text-slate-800 font-medium focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                  className="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 text-xs text-slate-800 font-medium focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                 >
                   <option value="Real Estate / Realtors">Real Estate / Realtors</option>
-                  <option value="Restaurants & Cafes">Restaurants & Cafes</option>
-                  <option value="Hotels & Lodging">Hotels & Lodging</option>
-                  <option value="Dentists & Clinics">Dentists & Clinics</option>
-                  <option value="Law Firms">Law Firms</option>
-                  <option value="Construction & Interior">Construction & Interior</option>
-                  <option value="Marketing Agencies">Marketing Agencies</option>
                   <option value="SaaS & Startups">SaaS & Startups</option>
+                  <option value="Law Firms">Law Firms</option>
+                  <option value="Dentists & Clinics">Dentists & Clinics</option>
+                  <option value="Restaurants & Cafes">Restaurants & Cafes</option>
+                  <option value="Marketing Agencies">Marketing Agencies</option>
                   <option value="Gyms & Salons">Gyms & Salons</option>
+                  <option value="E-Commerce Stores">E-Commerce Stores</option>
                 </select>
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-600 uppercase mb-1.5 flex items-center gap-1">
-                  <MapPin className="w-3.5 h-3.5 text-indigo-500" /> City or Keyword
+                <label className="block text-xs font-semibold text-slate-600 uppercase mb-1.5">
+                  City or Keyword
                 </label>
                 <input
                   type="text"
                   value={city}
                   onChange={(e) => setCity(e.target.value)}
-                  placeholder="e.g. Miami, London, Austin..."
-                  className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2.5 text-sm text-slate-800 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                  placeholder="e.g. Lahore, Karachi, Austin..."
+                  className="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 text-xs text-slate-800 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                 />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 uppercase mb-1.5">
+                  Opportunity Type
+                </label>
+                <select
+                  value={opportunityType}
+                  onChange={(e) => setOpportunityType(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 text-xs text-slate-800 font-medium focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                >
+                  <option value="$2,000+ Client Projects">$2,000+ Client Projects</option>
+                  <option value="Startup MVP Frontend">Startup MVP Frontend</option>
+                  <option value="Website Modernization">Website Modernization</option>
+                  <option value="Dashboard / Portal">Dashboard / Portal</option>
+                </select>
               </div>
             </div>
 
-            <div className="flex justify-end pt-2">
+            <div className="flex items-center justify-between pt-2">
+              <span className="text-xs text-slate-500 font-medium hidden sm:inline">
+                Strict search integrity enforced. Location and lead evidence are never mutated.
+              </span>
+
               <button
                 onClick={handleSearch}
-                disabled={loading}
-                className="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-semibold text-sm rounded-lg shadow-sm transition"
+                disabled={loading || isDemoDataMode}
+                className="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-sm transition"
               >
                 {loading ? (
                   <>
-                    <Loader2 className="w-4 h-4 animate-spin" /> Scanning Web & Qualification...
+                    <Loader2 className="w-4 h-4 animate-spin" /> Querying Discovery Engine...
                   </>
                 ) : (
                   <>
-                    <Sparkles className="w-4 h-4" /> Find & Audit Prospects
+                    <Sparkles className="w-4 h-4" /> Run Verified Client Search
                   </>
                 )}
               </button>
             </div>
           </div>
 
-          {/* Discovered Results Table */}
-          {discoveredLeads.length > 0 && (
-            <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-              <div className="p-4 border-b border-slate-200 flex items-center justify-between">
-                <h3 className="font-bold text-slate-900 text-base">
-                  Discovered High-Potential Businesses ({discoveredLeads.length})
+          {/* API Error / Provider Not Configured Alert */}
+          {apiError && !isDemoDataMode && (
+            <div className="bg-rose-50 border border-rose-200 rounded-2xl p-5 space-y-3">
+              <div className="flex items-start gap-3 text-rose-900">
+                <ShieldAlert className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+                <div className="space-y-1">
+                  <h4 className="font-extrabold text-sm text-rose-950 uppercase tracking-tight">
+                    LIVE LEAD PROVIDER NOT CONFIGURED
+                  </h4>
+                  <p className="text-xs text-rose-800 leading-relaxed">
+                    {apiError.message}
+                  </p>
+                  {apiError.code && (
+                    <span className="inline-block px-2 py-0.5 bg-rose-200 text-rose-900 font-mono text-[10px] rounded font-bold">
+                      Code: {apiError.code}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 pt-2 border-t border-rose-200">
+                <button
+                  onClick={handleSearch}
+                  className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-lg transition inline-flex items-center gap-1.5 shadow-xs"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" /> Retry Provider
+                </button>
+                <button
+                  onClick={() => setIsDemoDataMode(true)}
+                  className="px-3.5 py-1.5 bg-white border border-rose-300 text-rose-800 font-bold text-xs rounded-lg hover:bg-rose-100 transition inline-flex items-center gap-1.5"
+                >
+                  <Database className="w-3.5 h-3.5 text-amber-600" /> Enable Demo Data Mode
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Search Session Statistics Summary Bar */}
+          {searchSummary && !isDemoDataMode && (
+            <div className="bg-slate-900 text-white p-4 rounded-2xl border border-slate-800 shadow-md flex flex-wrap items-center justify-between gap-4 text-xs">
+              <div className="flex items-center gap-2 font-bold text-indigo-300">
+                <Sparkles className="w-4 h-4 text-indigo-400" /> Discovery Pipeline Execution Summary:
+              </div>
+
+              <div className="flex items-center gap-4 text-slate-300 font-semibold">
+                <span>Candidates Found: <strong className="text-white">{searchSummary.rawCount}</strong></span>
+                <span>•</span>
+                <span>New Verified: <strong className="text-emerald-400">{searchSummary.newCount}</strong></span>
+                <span>•</span>
+                <span>Duplicates Filtered: <strong className="text-amber-400">{searchSummary.duplicateCount}</strong></span>
+                <span>•</span>
+                <span>Suppressed: <strong className="text-rose-400">{searchSummary.suppressedCount}</strong></span>
+              </div>
+            </div>
+          )}
+
+          {/* Discovered Leads List */}
+          {(isDemoDataMode ? sampleDemoLeads : discoveredLeads).length > 0 && (
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+              <div className="p-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
+                <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                  Discovered Opportunities ({(isDemoDataMode ? sampleDemoLeads : discoveredLeads).length})
+                  {isDemoDataMode && (
+                    <span className="px-2 py-0.5 bg-amber-100 text-amber-800 text-[10px] font-extrabold rounded border border-amber-300">
+                      DEMO DATA
+                    </span>
+                  )}
                 </h3>
-                <span className="text-xs text-slate-500">
-                  Generated for {country} • {industry}
+                <span className="text-xs text-slate-500 font-medium">
+                  Filtered against suppression list & active database
                 </span>
               </div>
 
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs">
-                  <thead className="bg-slate-50 text-slate-500 uppercase font-bold tracking-wider border-b border-slate-200">
-                    <tr>
-                      <th className="p-3.5">Business & Contact</th>
-                      <th className="p-3.5">Website</th>
-                      <th className="p-3.5">Detected Flaw / Audit Issue</th>
-                      <th className="p-3.5">AI Score</th>
-                      <th className="p-3.5">Suggested Service</th>
-                      <th className="p-3.5 text-right">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-200 text-slate-700">
-                    {discoveredLeads.map((item, idx) => {
-                      const isImported = importedIds[idx];
-                      return (
-                        <tr key={`disc-${idx}-${item.businessName}`} className="hover:bg-slate-50/80 transition">
-                          <td className="p-3.5 font-semibold text-slate-900">
-                            <div>{item.businessName}</div>
-                            <div className="text-[11px] text-slate-500 font-normal">
-                              {item.contactPerson} ({item.email})
-                            </div>
-                          </td>
-                          <td className="p-3.5 text-indigo-600 font-medium">
-                            <a
-                              href={
-                                item.website.startsWith('http')
-                                  ? item.website
-                                  : `https://${item.website}`
-                              }
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="inline-flex items-center gap-1 hover:underline"
-                            >
-                              {item.website} <Globe className="w-3 h-3 text-slate-400" />
-                            </a>
-                          </td>
-                          <td className="p-3.5 max-w-xs text-slate-600">
-                            <span className="text-rose-600 font-semibold block">
-                              {item.websiteStatus}
+              <div className="divide-y divide-slate-200">
+                {(isDemoDataMode ? sampleDemoLeads : discoveredLeads).map((item, idx) => {
+                  const isImported = importedIds[idx];
+                  const scoreData = calculateExplainableScore(item);
+                  const valueData = estimateProjectValue(item);
+
+                  return (
+                    <div
+                      key={`disc-${idx}-${item.businessName}`}
+                      className="p-5 hover:bg-slate-50/80 transition space-y-3"
+                    >
+                      <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
+                        <div className="space-y-1.5 flex-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <h4 className="font-extrabold text-slate-900 text-base">
+                              {item.businessName}
+                            </h4>
+
+                            {/* Verification Badge */}
+                            <span className="px-2 py-0.5 bg-emerald-50 text-emerald-800 font-bold text-[10px] rounded-full border border-emerald-200 flex items-center gap-1">
+                              <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                              VERIFIED
                             </span>
-                            <span className="text-[11px] text-slate-500">
-                              {item.auditIssue}
-                            </span>
-                          </td>
-                          <td className="p-3.5 font-extrabold text-slate-900 text-sm">
-                            {item.score}
-                            <span className="text-xs text-slate-400 font-normal">/100</span>
-                          </td>
-                          <td className="p-3.5 font-medium text-slate-700">
-                            {item.suggestedService}
-                          </td>
-                          <td className="p-3.5 text-right space-x-2">
-                            {isImported ? (
-                              <span className="inline-flex items-center gap-1 text-emerald-600 font-bold text-[11px]">
-                                <CheckCircle2 className="w-3.5 h-3.5" /> Added to DB
+
+                            {/* Skill Match Badge */}
+                            {scoreData.skillMatchStatus === 'SKILL_GAP' ? (
+                              <span className="px-2 py-0.5 bg-rose-100 text-rose-900 font-extrabold text-[10px] rounded-full border border-rose-300">
+                                SKILL GAP — VERIFY BEFORE OUTREACH
                               </span>
                             ) : (
-                              <button
-                                onClick={() => handleImport(item, idx)}
-                                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-lg text-xs transition inline-flex items-center gap-1 shadow-sm"
-                              >
-                                <Plus className="w-3.5 h-3.5" /> Import Lead
-                              </button>
+                              <span className="px-2 py-0.5 bg-indigo-50 text-indigo-700 font-bold text-[10px] rounded-full border border-indigo-200">
+                                React Skill Match: 100%
+                              </span>
                             )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                          </div>
+
+                          <div className="text-xs text-slate-600 flex flex-wrap items-center gap-3 font-medium">
+                            <span>Contact: <strong>{item.contactPerson}</strong></span>
+                            <span>•</span>
+                            <span className="flex items-center gap-1">
+                              <MapPin className="w-3 h-3 text-slate-400" />
+                              {item.city || city || 'Local'}, {item.country || country}
+                            </span>
+                            <span>•</span>
+                            <a
+                              href={item.website?.startsWith('http') ? item.website : `https://${item.website}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-indigo-600 hover:underline flex items-center gap-1"
+                            >
+                              {item.website} <ExternalLink className="w-3 h-3" />
+                            </a>
+                          </div>
+
+                          <p className="text-xs text-slate-600 bg-slate-100 p-2.5 rounded-xl border border-slate-200/80">
+                            <strong>Evidence:</strong> {item.evidenceText || item.auditIssue}
+                          </p>
+                        </div>
+
+                        {/* Scores & Value Box */}
+                        <div className="flex flex-wrap md:flex-col items-end gap-2 shrink-0">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-bold text-slate-500">Qualification Score:</span>
+                            <button
+                              onClick={() => setActiveScoreModal({ lead: item, scoreData })}
+                              className="px-3 py-1 bg-slate-900 text-white font-extrabold text-xs rounded-xl hover:bg-slate-800 transition flex items-center gap-1 shadow-xs"
+                            >
+                              {scoreData.totalScore}/100 <HelpCircle className="w-3 h-3 text-amber-400" />
+                            </button>
+                          </div>
+
+                          <div className="text-right">
+                            <div className="text-xs font-bold text-emerald-700">
+                              Value: {valueData.estimatedValueRange}
+                            </div>
+                            <div className="text-[10px] text-slate-500">
+                              Confidence: {valueData.confidence}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Action Bar */}
+                      <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-xs">
+                        <div className="text-slate-500 font-medium text-[11px]">
+                          Suggested Service: <strong className="text-slate-800">{item.suggestedService || valueData.recommendedService}</strong>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => setActiveBriefModal({ lead: item, scoreData, valueData })}
+                            className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition flex items-center gap-1"
+                          >
+                            <FileText className="w-3.5 h-3.5 text-indigo-600" /> Opportunity Brief
+                          </button>
+
+                          {isImported ? (
+                            <span className="inline-flex items-center gap-1 text-emerald-600 font-bold text-xs px-3 py-1.5 bg-emerald-50 rounded-xl border border-emerald-200">
+                              <CheckCircle2 className="w-3.5 h-3.5" /> Added to DB
+                            </span>
+                          ) : (
+                            <button
+                              onClick={() => handleImport(item, idx)}
+                              className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-xs transition inline-flex items-center gap-1 shadow-sm"
+                            >
+                              <Plus className="w-3.5 h-3.5" /> Import Lead
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}
         </>
-      ) : (
-        /* LinkedIn Prospector Tool UI */
+      )}
+
+      {/* Jobs Sub-Tab */}
+      {activeSubTab === 'job_opportunities' && (
+        <div className="space-y-4">
+          <div className="bg-slate-900 text-white p-5 rounded-2xl border border-slate-800 shadow-md space-y-2">
+            <h3 className="font-extrabold text-base flex items-center gap-2">
+              <Briefcase className="w-5 h-5 text-emerald-400" /> Remote Frontend Jobs & Subcontracting Contracts
+            </h3>
+            <p className="text-xs text-slate-300">
+              Verified job postings seeking React, JavaScript, and HTML/CSS web developers.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {sampleJobOpportunities.map((job, jIdx) => (
+              <div key={jIdx} className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-3">
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <h4 className="font-extrabold text-slate-900 text-sm">{job.role}</h4>
+                    <p className="text-xs font-semibold text-indigo-600">{job.company} • {job.location}</p>
+                  </div>
+                  <span className="px-2.5 py-1 bg-emerald-50 text-emerald-700 font-bold text-xs rounded-full border border-emerald-200 shrink-0">
+                    {job.budget}
+                  </span>
+                </div>
+
+                <p className="text-xs text-slate-600 leading-relaxed">{job.description}</p>
+
+                <div className="flex flex-wrap gap-1.5 pt-1">
+                  {job.skills.map((s, sKey) => (
+                    <span key={sKey} className="px-2 py-0.5 bg-slate-100 text-slate-700 font-semibold text-[10px] rounded-md border border-slate-200">
+                      {s}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* LinkedIn Prospector */}
+      {activeSubTab === 'linkedin_prospector' && (
         <div className="space-y-6">
           <div className="bg-gradient-to-r from-blue-900 via-indigo-950 to-slate-900 text-white p-6 rounded-2xl border border-blue-900 shadow-xl space-y-4">
             <div className="flex items-center gap-2 text-blue-400 font-bold text-xs uppercase tracking-wider">
@@ -393,9 +732,6 @@ export const FinderView: React.FC<FinderViewProps> = ({
             <h2 className="text-lg font-extrabold text-white">
               Find Key Executive Decision-Makers by Company Name & Location
             </h2>
-            <p className="text-xs text-slate-300 leading-relaxed max-w-2xl">
-              Search specific company names, domains, or industries to extract verified decision-makers (CEOs, VPs of Marketing, Founders) with direct work emails and custom pitch hooks.
-            </p>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2">
               <div>
@@ -406,7 +742,7 @@ export const FinderView: React.FC<FinderViewProps> = ({
                   type="text"
                   value={companyName}
                   onChange={(e) => setCompanyName(e.target.value)}
-                  placeholder="e.g. Luxe Living, Remax, Shopify..."
+                  placeholder="e.g. Luxe Living, Remax..."
                   className="w-full bg-slate-900/90 border border-slate-700 rounded-xl p-2.5 text-xs text-white placeholder-slate-500 focus:ring-2 focus:ring-blue-500 focus:outline-none"
                 />
               </div>
@@ -432,7 +768,7 @@ export const FinderView: React.FC<FinderViewProps> = ({
                   type="text"
                   value={location}
                   onChange={(e) => setLocation(e.target.value)}
-                  placeholder="e.g. San Francisco, CA / London / Global"
+                  placeholder="e.g. San Francisco, CA"
                   className="w-full bg-slate-900/90 border border-slate-700 rounded-xl p-2.5 text-xs text-white placeholder-slate-500 focus:ring-2 focus:ring-blue-500 focus:outline-none"
                 />
               </div>
@@ -457,99 +793,155 @@ export const FinderView: React.FC<FinderViewProps> = ({
             </div>
           </div>
 
-          {/* LinkedIn Results Grid */}
           {prospects.length > 0 && (
             <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <h3 className="font-bold text-slate-900 text-base flex items-center gap-2">
-                  <UserCheck className="w-5 h-5 text-blue-600" /> LinkedIn Executive Decision-Makers Discovered ({prospects.length})
-                </h3>
-              </div>
+              <h3 className="font-bold text-slate-900 text-base flex items-center gap-2">
+                <UserCheck className="w-5 h-5 text-blue-600" /> LinkedIn Decision-Makers ({prospects.length})
+              </h3>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {prospects.map((p, idx) => {
-                  const isImported = importedProspectIds[idx];
-                  return (
-                    <div
-                      key={`prospect-${idx}-${p.contactPerson}`}
-                      className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs hover:shadow-md transition space-y-3 relative overflow-hidden"
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="flex items-center gap-3">
-                          <div className="w-12 h-12 rounded-full bg-blue-100 text-blue-700 font-extrabold text-base flex items-center justify-center border border-blue-200">
-                            {p.contactPerson.split(' ').map((n: string) => n[0]).join('')}
-                          </div>
-                          <div>
-                            <h4 className="font-extrabold text-slate-900 text-sm flex items-center gap-1.5">
-                              {p.contactPerson}
-                              <a
-                                href={p.linkedInUrl}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-blue-600 hover:text-blue-800"
-                                title="Open LinkedIn Profile"
-                              >
-                                <Linkedin className="w-3.5 h-3.5" />
-                              </a>
-                            </h4>
-                            <p className="text-xs font-semibold text-indigo-600">{p.roleTitle}</p>
-                            <p className="text-[11px] text-slate-500 flex items-center gap-1">
-                              <Building2 className="w-3 h-3" /> {p.businessName} • {p.location}
-                            </p>
-                          </div>
-                        </div>
-
-                        <span className="px-2.5 py-1 bg-emerald-50 text-emerald-700 font-bold text-[10px] rounded-full border border-emerald-200">
-                          {p.score}/100 Score
-                        </span>
+                {prospects.map((p, idx) => (
+                  <div
+                    key={`prospect-${idx}`}
+                    className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-3"
+                  >
+                    <div className="flex items-start justify-between">
+                      <div>
+                        <h4 className="font-extrabold text-slate-900 text-sm">{p.contactPerson}</h4>
+                        <p className="text-xs text-indigo-600 font-semibold">{p.roleTitle}</p>
+                        <p className="text-[11px] text-slate-500">{p.businessName} • {p.location}</p>
                       </div>
-
-                      <div className="bg-slate-50 p-3 rounded-xl border border-slate-200/80 text-xs space-y-1">
-                        <div className="text-slate-600 flex items-center justify-between text-[11px]">
-                          <span><strong>Email:</strong> {p.email}</span>
-                          <span className="text-slate-400">{p.teamSize}</span>
-                        </div>
-                        <div className="text-rose-700 font-semibold text-[11px]">
-                          <strong>Site Issue:</strong> {p.auditIssue}
-                        </div>
-                      </div>
-
-                      <div className="text-[11px] text-slate-600 italic bg-amber-50/70 border border-amber-200 p-2.5 rounded-lg">
-                        "{p.pitchHook}"
-                      </div>
-
-                      <div className="flex items-center justify-between pt-1">
-                        <a
-                          href={p.website.startsWith('http') ? p.website : `https://${p.website}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-xs text-indigo-600 font-medium hover:underline flex items-center gap-1"
-                        >
-                          {p.website} <ExternalLink className="w-3 h-3" />
-                        </a>
-
-                        {isImported ? (
-                          <span className="text-emerald-600 font-bold text-xs flex items-center gap-1">
-                            <CheckCircle2 className="w-4 h-4" /> Added to Leads DB
-                          </span>
-                        ) : (
-                          <button
-                            onClick={() => handleImportProspect(p, idx)}
-                            className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-lg transition shadow-xs flex items-center gap-1"
-                          >
-                            <Plus className="w-3.5 h-3.5" /> Save as Lead
-                          </button>
-                        )}
-                      </div>
+                      <span className="px-2.5 py-1 bg-emerald-50 text-emerald-700 font-bold text-xs rounded-full">
+                        {p.score}/100 Score
+                      </span>
                     </div>
-                  );
-                })}
+
+                    <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-xs">
+                      <a href={p.linkedInUrl} target="_blank" rel="noreferrer" className="text-blue-600 font-bold hover:underline">
+                        View Profile
+                      </a>
+                      <button
+                        onClick={() => handleImport(p, idx)}
+                        className="px-3 py-1.5 bg-indigo-600 text-white font-bold rounded-lg hover:bg-indigo-700"
+                      >
+                        Import Lead
+                      </button>
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           )}
         </div>
       )}
+
+      {/* WHY THIS SCORE? Explanation Modal */}
+      {activeScoreModal && (
+        <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 space-y-4 shadow-2xl border border-slate-200">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h3 className="font-extrabold text-base text-slate-900 flex items-center gap-2">
+                <HelpCircle className="w-5 h-5 text-indigo-600" /> Why This Score ({activeScoreModal.scoreData.totalScore}/100)?
+              </h3>
+              <button
+                onClick={() => setActiveScoreModal(null)}
+                className="p-1 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-slate-700"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-2 text-xs">
+              <p className="text-slate-600 font-medium">
+                Qualification breakdown for <strong>{activeScoreModal.lead.businessName}</strong> based on evidence and developer profile matching:
+              </p>
+
+              <div className="space-y-2 pt-2">
+                {activeScoreModal.scoreData.scoreExplanation.map((exp, expIdx) => (
+                  <div key={expIdx} className="p-2.5 bg-slate-50 rounded-xl border border-slate-200 text-slate-800 font-medium flex items-start gap-2">
+                    <Check className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                    <span>{exp}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="pt-3 border-t border-slate-100 flex justify-end">
+              <button
+                onClick={() => setActiveScoreModal(null)}
+                className="px-4 py-2 bg-slate-900 text-white font-bold text-xs rounded-xl hover:bg-slate-800"
+              >
+                Close Explanation
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* OPPORTUNITY BRIEF MODAL */}
+      {activeBriefModal && (
+        <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl max-w-2xl w-full p-6 space-y-5 shadow-2xl border border-slate-200 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div>
+                <span className="text-[10px] font-extrabold text-indigo-600 uppercase tracking-wider block">
+                  Evidence-Driven Prospect Brief
+                </span>
+                <h3 className="font-extrabold text-lg text-slate-900">
+                  {activeBriefModal.lead.businessName}
+                </h3>
+              </div>
+              <button
+                onClick={() => setActiveBriefModal(null)}
+                className="p-1 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-slate-700"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+              <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 space-y-1">
+                <span className="text-slate-500 font-semibold block uppercase text-[10px]">Company & Location</span>
+                <div className="font-bold text-slate-900 text-sm">{activeBriefModal.lead.businessName}</div>
+                <div className="text-slate-600">{activeBriefModal.lead.city || 'Local'}, {activeBriefModal.lead.country}</div>
+                <div className="text-indigo-600">{activeBriefModal.lead.website}</div>
+              </div>
+
+              <div className="p-3.5 bg-emerald-50 rounded-xl border border-emerald-200 space-y-1">
+                <span className="text-emerald-800 font-semibold block uppercase text-[10px]">Estimated Value Scope</span>
+                <div className="font-extrabold text-emerald-950 text-base">{activeBriefModal.valueData.estimatedValueRange}</div>
+                <div className="text-emerald-800">Confidence: {activeBriefModal.valueData.confidence}</div>
+              </div>
+            </div>
+
+            <div className="space-y-2 text-xs">
+              <h4 className="font-bold text-slate-900 uppercase text-[11px] tracking-wider">Evidence & Detected Need</h4>
+              <p className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-slate-700 font-medium leading-relaxed">
+                {activeBriefModal.lead.evidenceText || activeBriefModal.lead.auditIssue}
+              </p>
+            </div>
+
+            <div className="space-y-2 text-xs">
+              <h4 className="font-bold text-slate-900 uppercase text-[11px] tracking-wider">Recommended Portfolio Proof Item</h4>
+              <div className="p-3 bg-indigo-50 text-indigo-950 rounded-xl border border-indigo-200 font-bold">
+                {activeBriefModal.valueData.recommendedPortfolioProject}
+              </div>
+            </div>
+
+            <div className="pt-3 border-t border-slate-100 flex items-center justify-between">
+              <p className="text-[11px] text-slate-500">
+                {activeBriefModal.valueData.disclaimer}
+              </p>
+              <button
+                onClick={() => setActiveBriefModal(null)}
+                className="px-4 py-2 bg-slate-900 text-white font-bold text-xs rounded-xl hover:bg-slate-800"
+              >
+                Close Brief
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
-

@@ -1,7 +1,10 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Menu, Zap } from 'lucide-react';
+import { Menu, Zap, Terminal } from 'lucide-react';
 import { Sidebar } from './components/Sidebar';
 import { ApiBanner } from './components/ApiBanner';
+import { LiveClock } from './components/LiveClock';
+import { DebugPanel } from './components/DebugPanel';
+import { loggedFetch } from './utils/apiLogger';
 import { DashboardView } from './components/DashboardView';
 import { FinderView } from './components/FinderView';
 import { DatabaseView } from './components/DatabaseView';
@@ -19,6 +22,9 @@ import { MediaVaultView } from './components/MediaVaultView';
 import { CrmSuiteView } from './components/CrmSuiteView';
 import { KashiAgentView } from './components/KashiAgentView';
 import { TeamActivityView } from './components/TeamActivityView';
+import { CleanupCenterView } from './components/CleanupCenterView';
+import { DataSourcesView } from './components/DataSourcesView';
+import { ToastContainer } from './components/ToastContainer';
 
 import { LeadModal } from './components/LeadModal';
 import { EmailModal } from './components/EmailModal';
@@ -27,7 +33,20 @@ import { AuditModal } from './components/AuditModal';
 import { ImportModal } from './components/ImportModal';
 
 import { INITIAL_LEADS, INITIAL_OUTREACH_LOGS, INITIAL_SCHEDULED_EMAILS, INITIAL_INBOUND_REPLIES } from './data/initialLeads';
-import { Lead, OutreachLog, ScheduledEmail, UserProfile, EmailTemplate, InboundReply, ContactStatus } from './types';
+import { 
+  Lead, 
+  OutreachLog, 
+  ScheduledEmail, 
+  UserProfile, 
+  EmailTemplate, 
+  InboundReply, 
+  ContactStatus,
+  TrashItem,
+  SuppressedDomainRecord,
+  AutoCleanupSettings,
+  ToastNotice,
+  CleanupReason
+} from './types';
 import { exportLeadsToExcel } from './utils/excel';
 
 export default function App() {
@@ -39,7 +58,20 @@ export default function App() {
   const [leads, setLeads] = useState<Lead[]>(() => {
     const saved = localStorage.getItem('leadflow_leads');
     if (saved) {
-      try { return JSON.parse(saved); } catch (e) { /* ignore */ }
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const seen = new Set<string>();
+          return parsed.map((item, idx) => {
+            let id = item.id;
+            if (!id || seen.has(id)) {
+              id = `lead-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 8)}`;
+            }
+            seen.add(id);
+            return { ...item, id };
+          });
+        }
+      } catch (e) { /* ignore */ }
     }
     return INITIAL_LEADS;
   });
@@ -101,7 +133,54 @@ export default function App() {
     };
   });
 
-  // Modal States
+  // Persistent Trash Bin State
+  const [trashItems, setTrashItems] = useState<TrashItem[]>(() => {
+    const saved = localStorage.getItem('leadflow_trash');
+    if (saved) {
+      try { return JSON.parse(saved); } catch (e) { /* ignore */ }
+    }
+    return [];
+  });
+
+  // Persistent Suppressed Blacklist
+  const [suppressedRecords, setSuppressedRecords] = useState<SuppressedDomainRecord[]>(() => {
+    const saved = localStorage.getItem('leadflow_suppressed');
+    if (saved) {
+      try { return JSON.parse(saved); } catch (e) { /* ignore */ }
+    }
+    return [];
+  });
+
+  // Persistent Auto-Cleanup Settings
+  const [autoCleanupSettings, setAutoCleanupSettings] = useState<AutoCleanupSettings>(() => {
+    const saved = localStorage.getItem('leadflow_autocleanup');
+    if (saved) {
+      try { return JSON.parse(saved); } catch (e) { /* ignore */ }
+    }
+    return {
+      enabled: false,
+      autoRemoveTestDays: 0,
+      autoArchiveInactiveDays: 0,
+      autoArchiveCompletedDays: 0,
+    };
+  });
+
+  // Toast Notifications
+  const [toasts, setToasts] = useState<ToastNotice[]>([]);
+
+  const showToast = (message: string, undoAction?: () => void) => {
+    const id = `toast-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+    const newToast: ToastNotice = { id, message, undoAction };
+    setToasts((prev) => [newToast, ...prev].slice(0, 4));
+
+    setTimeout(() => {
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+    }, 6000);
+  };
+
+  const dismissToast = (id: string) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  };
   const [isLeadModalOpen, setIsLeadModalOpen] = useState(false);
   const [editingLead, setEditingLead] = useState<Lead | null>(null);
 
@@ -116,6 +195,7 @@ export default function App() {
   const [auditLead, setAuditLead] = useState<Lead | null>(null);
 
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [isDebugOpen, setIsDebugOpen] = useState(false);
 
   // Background 30-Minute Inbox Poller State
   const [lastPolledAt, setLastPolledAt] = useState<Date | null>(new Date());
@@ -125,7 +205,7 @@ export default function App() {
   const triggerInboxPolling = async () => {
     setIsPolling(true);
     try {
-      const res = await fetch('/api/gmail/poll-inbox', {
+      const { ok, data } = await loggedFetch('/api/gmail/poll-inbox', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -133,7 +213,6 @@ export default function App() {
           leadDomains: leads.map((l) => l.website).filter(Boolean),
         }),
       });
-      const data = await res.json();
       setLastPolledAt(new Date());
 
       if (data.success && data.foundReplies && data.foundReplies.length > 0) {
@@ -186,6 +265,209 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('leadflow_profile', JSON.stringify(profile));
   }, [profile]);
+
+  useEffect(() => {
+    localStorage.setItem('leadflow_trash', JSON.stringify(trashItems));
+  }, [trashItems]);
+
+  useEffect(() => {
+    localStorage.setItem('leadflow_suppressed', JSON.stringify(suppressedRecords));
+  }, [suppressedRecords]);
+
+  useEffect(() => {
+    localStorage.setItem('leadflow_autocleanup', JSON.stringify(autoCleanupSettings));
+  }, [autoCleanupSettings]);
+
+  // Clean Data Action Handlers with Undo Support
+  const handleArchiveLead = (lead: Lead, reason?: CleanupReason) => {
+    const previousLeads = [...leads];
+    const updated = leads.map(l => l.id === lead.id ? { 
+      ...l, 
+      archived: true, 
+      recordStatus: 'archived' as const, 
+      archiveReason: reason || 'Outdated' 
+    } : l);
+    setLeads(updated);
+
+    showToast(`Archived ${lead.businessName}`, () => setLeads(previousLeads));
+  };
+
+  const handleSuppressLead = (lead: Lead, reason?: CleanupReason) => {
+    const previousLeads = [...leads];
+    const previousSuppressed = [...suppressedRecords];
+
+    const updated = leads.map(l => l.id === lead.id ? { 
+      ...l, 
+      suppressed: true, 
+      recordStatus: 'suppressed' as const, 
+      suppressReason: reason || 'Irrelevant' 
+    } : l);
+    setLeads(updated);
+
+    const cleanDomain = lead.website.replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0].toLowerCase().trim();
+    if (cleanDomain) {
+      setSuppressedRecords(prev => [
+        {
+          id: `suppress-${Date.now()}`,
+          domainOrEmail: cleanDomain,
+          reason: reason || 'Irrelevant',
+          suppressedAt: new Date().toISOString().split('T')[0],
+          leadId: lead.id,
+        },
+        ...prev,
+      ]);
+    }
+
+    showToast(`Suppressed ${lead.businessName} from discovery`, () => {
+      setLeads(previousLeads);
+      setSuppressedRecords(previousSuppressed);
+    });
+  };
+
+  const handleTrashLead = (lead: Lead, reason?: CleanupReason) => {
+    const previousLeads = [...leads];
+    const previousTrash = [...trashItems];
+
+    const updated = leads.map(l => l.id === lead.id ? { 
+      ...l, 
+      trashed: true, 
+      recordStatus: 'trashed' as const, 
+      trashReason: reason || 'Irrelevant' 
+    } : l);
+    setLeads(updated);
+
+    const trashEntry: TrashItem = {
+      id: `trash-${Date.now()}-${lead.id}`,
+      originalId: lead.id,
+      originalType: 'Lead',
+      title: lead.businessName,
+      description: `${lead.industry} • ${lead.website}`,
+      deletedAt: new Date().toISOString().split('T')[0],
+      reason: reason || 'Manual deletion',
+      payload: lead,
+    };
+    setTrashItems(prev => [trashEntry, ...prev]);
+
+    showToast(`Moved ${lead.businessName} to Trash`, () => {
+      setLeads(previousLeads);
+      setTrashItems(previousTrash);
+    });
+  };
+
+  const handlePermanentDeleteLead = (lead: Lead) => {
+    const previousLeads = [...leads];
+    setLeads(prev => prev.filter(l => l.id !== lead.id));
+    setTrashItems(prev => prev.filter(t => t.originalId !== lead.id));
+
+    showToast(`Permanently deleted ${lead.businessName}`, () => {
+      setLeads(previousLeads);
+    });
+  };
+
+  const handleRestoreLead = (lead: Lead) => {
+    const previousLeads = [...leads];
+    const updated = leads.map(l => l.id === lead.id ? { 
+      ...l, 
+      archived: false, 
+      suppressed: false, 
+      trashed: false, 
+      recordStatus: 'active' as const 
+    } : l);
+    setLeads(updated);
+    setTrashItems(prev => prev.filter(t => t.originalId !== lead.id));
+
+    showToast(`Restored ${lead.businessName} to Active Leads`, () => {
+      setLeads(previousLeads);
+    });
+  };
+
+  const handleRestoreTrashItem = (id: string) => {
+    const trash = trashItems.find(t => t.id === id);
+    if (!trash) return;
+
+    if (trash.originalType === 'lead' && trash.originalId) {
+      setLeads(prev => prev.map(l => l.id === trash.originalId ? { 
+        ...l, 
+        trashed: false, 
+        recordStatus: 'active' as const 
+      } : l));
+    }
+    setTrashItems(prev => prev.filter(t => t.id !== id));
+    showToast(`Restored ${trash.title}`);
+  };
+
+  const handlePermanentlyDeleteTrashItem = (id: string) => {
+    const trash = trashItems.find(t => t.id === id);
+    if (trash && trash.originalId) {
+      setLeads(prev => prev.filter(l => l.id !== trash.originalId));
+    }
+    setTrashItems(prev => prev.filter(t => t.id !== id));
+    showToast(`Permanently removed from Trash`);
+  };
+
+  const handleEmptyTrash = () => {
+    const trashedIds = new Set(trashItems.map(t => t.originalId).filter(Boolean));
+    setLeads(prev => prev.filter(l => !trashedIds.has(l.id) && !l.trashed));
+    setTrashItems([]);
+    showToast('Trash bin emptied successfully');
+  };
+
+  const handleUnsuppressRecord = (id: string) => {
+    const rec = suppressedRecords.find(r => r.id === id);
+    if (rec && rec.leadId) {
+      setLeads(prev => prev.map(l => l.id === rec.leadId ? { ...l, suppressed: false, recordStatus: 'active' as const } : l));
+    }
+    setSuppressedRecords(prev => prev.filter(r => r.id !== id));
+    showToast(`Unsuppressed record`);
+  };
+
+  const handleDeleteAllDemoData = () => {
+    const previousLeads = [...leads];
+    setLeads(prev => prev.filter(l => !l.isDemo && !l.id.startsWith('lead-')));
+    showToast('Purged all sample demo data records', () => setLeads(previousLeads));
+  };
+
+  const handleBulkArchive = (leadIds: string[]) => {
+    const previousLeads = [...leads];
+    const idSet = new Set(leadIds);
+    setLeads(prev => prev.map(l => idSet.has(l.id) ? { ...l, archived: true, recordStatus: 'archived' as const } : l));
+    showToast(`Archived ${leadIds.length} leads`, () => setLeads(previousLeads));
+  };
+
+  const handleBulkSuppress = (leadIds: string[]) => {
+    const previousLeads = [...leads];
+    const idSet = new Set(leadIds);
+    setLeads(prev => prev.map(l => idSet.has(l.id) ? { ...l, suppressed: true, recordStatus: 'suppressed' as const } : l));
+    showToast(`Suppressed ${leadIds.length} leads`, () => setLeads(previousLeads));
+  };
+
+  const handleBulkTrash = (leadIds: string[]) => {
+    const previousLeads = [...leads];
+    const idSet = new Set(leadIds);
+    setLeads(prev => prev.map(l => idSet.has(l.id) ? { ...l, trashed: true, recordStatus: 'trashed' as const } : l));
+
+    const newTrashEntries: TrashItem[] = leads.filter(l => idSet.has(l.id)).map(l => ({
+      id: `trash-${Date.now()}-${l.id}`,
+      originalId: l.id,
+      originalType: 'Lead' as const,
+      title: l.businessName,
+      description: `${l.industry} • ${l.website}`,
+      deletedAt: new Date().toISOString().split('T')[0],
+      reason: 'Bulk deletion',
+      payload: l,
+    }));
+
+    setTrashItems(prev => [...newTrashEntries, ...prev]);
+    showToast(`Moved ${leadIds.length} leads to Trash`, () => setLeads(previousLeads));
+  };
+
+  const handleBulkDelete = (leadIds: string[]) => {
+    const previousLeads = [...leads];
+    const idSet = new Set(leadIds);
+    setLeads(prev => prev.filter(l => !idSet.has(l.id)));
+    setTrashItems(prev => prev.filter(t => !idSet.has(t.originalId || '')));
+    showToast(`Permanently deleted ${leadIds.length} leads`, () => setLeads(previousLeads));
+  };
 
   // Real-Time Company Enrichment Action
   const handleEnrichLead = async (lead: Lead) => {
@@ -254,7 +536,7 @@ export default function App() {
       if (l.contactStatus === 'Follow-Up Due') return true;
       if (l.lastContactDate) {
         const sentTime = new Date(l.lastContactDate).getTime();
-        const currentTime = new Date('2026-08-10').getTime();
+        const currentTime = new Date().getTime();
         const diffDays = Math.floor((currentTime - sentTime) / (1000 * 60 * 60 * 24));
         return diffDays >= 5;
       }
@@ -269,9 +551,10 @@ export default function App() {
         prev.map((l) => (l.id === existingId ? { ...l, ...leadData } : l))
       );
     } else {
+      const uniqueId = `lead-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
       const newLead: Lead = {
         ...leadData,
-        id: `lead-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+        id: uniqueId,
         createdAt: new Date().toISOString().split('T')[0],
       };
       setLeads((prev) => [newLead, ...prev]);
@@ -293,7 +576,7 @@ export default function App() {
   const handleImportLeads = (newLeads: Omit<Lead, 'id' | 'createdAt'>[]) => {
     const formatted: Lead[] = newLeads.map((nl, idx) => ({
       ...nl,
-      id: `imported-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 5)}`,
+      id: `imported-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 9)}`,
       createdAt: new Date().toISOString().split('T')[0],
     }));
     setLeads((prev) => [...formatted, ...prev]);
@@ -421,7 +704,7 @@ export default function App() {
   };
 
   const handleMarkReplied = (logId: string, leadId: string) => {
-    const today = '2026-08-10';
+    const today = new Date().toISOString().split('T')[0];
 
     setOutreachLogs((prev) =>
       prev.map((log) =>
@@ -501,7 +784,37 @@ export default function App() {
       </div>
 
       {/* Main View Area */}
-      <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto w-full overflow-x-hidden">
+      <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto w-full overflow-x-hidden space-y-4">
+        {/* Top Real-time System Header & Live Clock */}
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 bg-white p-3.5 rounded-2xl border border-slate-200/80 shadow-xs">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-600 to-indigo-500 text-white flex items-center justify-center font-extrabold shadow-sm">
+              <Zap className="w-4 h-4 fill-white" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="font-extrabold text-slate-900 text-sm tracking-tight">Agent Kashi OS</span>
+                <span className="text-[10px] bg-indigo-50 text-indigo-700 font-bold px-2 py-0.5 rounded-full border border-indigo-200/80">
+                  v3.6 Acquisition Engine
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 font-medium">
+                Muhammad Waqas • Frontend Developer Client Acquisition Platform
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setIsDebugOpen(!isDebugOpen)}
+              className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-xs"
+              title="Open Netlify API & Deployment Debugger"
+            >
+              <Terminal className="w-3.5 h-3.5 text-emerald-400" /> API Debugger
+            </button>
+            <LiveClock />
+          </div>
+        </div>
+
         {/* Top API Banner */}
         <ApiBanner onConfigureKeys={() => setActiveTab('settings')} />
 
@@ -571,6 +884,8 @@ export default function App() {
               setSelectedTemplate(null);
               setIsEmailModalOpen(true);
             }}
+            suppressedRecords={suppressedRecords}
+            onSuppressLead={(lead) => handleSuppressLead(lead, 'Suppressed from discovery')}
           />
         )}
 
@@ -635,6 +950,36 @@ export default function App() {
             }}
             onEnrichLead={handleEnrichLead}
             onExportExcel={() => exportLeadsToExcel(leads)}
+            onArchiveLead={handleArchiveLead}
+            onSuppressLead={handleSuppressLead}
+            onTrashLead={handleTrashLead}
+            onPermanentDeleteLead={handlePermanentDeleteLead}
+            onRestoreLead={handleRestoreLead}
+            onBulkArchive={handleBulkArchive}
+            onBulkSuppress={handleBulkSuppress}
+            onBulkTrash={handleBulkTrash}
+            onBulkDelete={handleBulkDelete}
+          />
+        )}
+
+        {(activeTab === 'data_sources' || activeTab === 'ai_status') && (
+          <DataSourcesView />
+        )}
+
+        {activeTab === 'cleanup' && (
+          <CleanupCenterView
+            leads={leads}
+            trashItems={trashItems}
+            suppressedRecords={suppressedRecords}
+            autoCleanupSettings={autoCleanupSettings}
+            onUpdateLeads={setLeads}
+            onRestoreTrashItem={handleRestoreTrashItem}
+            onPermanentlyDeleteTrashItem={handlePermanentlyDeleteTrashItem}
+            onEmptyTrash={handleEmptyTrash}
+            onUnsuppressRecord={handleUnsuppressRecord}
+            onDeleteAllDemoData={handleDeleteAllDemoData}
+            onUpdateAutoCleanupSettings={setAutoCleanupSettings}
+            onShowToast={showToast}
           />
         )}
 
@@ -800,6 +1145,9 @@ export default function App() {
         onClose={() => setIsImportModalOpen(false)}
         onImportLeads={handleImportLeads}
       />
+
+      <DebugPanel isOpen={isDebugOpen} onClose={() => setIsDebugOpen(false)} />
+      <ToastContainer toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
 }

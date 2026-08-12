@@ -14,6 +14,24 @@ export type SpeedRating = 'Fast' | 'Average' | 'Slow';
 
 export type AuditStatus = 'Pending' | 'Audited' | 'Critical Issues';
 
+export type LeadRecordStatus = 'active' | 'archived' | 'suppressed' | 'trashed';
+
+export type CleanupReason = 
+  | 'Irrelevant'
+  | 'Duplicate'
+  | 'Fake'
+  | 'Outdated'
+  | 'Wrong Location'
+  | 'Wrong Industry'
+  | 'No Response'
+  | 'Not Interested'
+  | 'Test Data'
+  | 'Demo Data'
+  | 'Bad Contact'
+  | 'Bad Website'
+  | 'Competitor'
+  | 'Other';
+
 export interface CompanyEnrichment {
   linkedinUrl?: string;
   twitterUrl?: string;
@@ -81,6 +99,67 @@ export interface Lead {
   // Enriched fields
   enrichment?: CompanyEnrichment;
   credibility?: CredibilityData;
+
+  // Cleanup & Data Management Fields
+  archived?: boolean;
+  suppressed?: boolean;
+  trashed?: boolean;
+  trashedAt?: string;
+  isDemo?: boolean;
+  suppressReason?: CleanupReason;
+  archiveReason?: CleanupReason;
+  trashReason?: CleanupReason;
+  recordStatus?: LeadRecordStatus;
+}
+
+export interface TrashItem {
+  id: string;
+  originalType: 'Lead' | 'Draft' | 'Search' | 'Opportunity' | 'Note';
+  originalId: string;
+  title: string;
+  description: string;
+  deletedAt: string;
+  reason?: CleanupReason | string;
+  payload: any; // Full original item to enable exact restoration
+}
+
+export interface SuppressedDomainRecord {
+  id: string;
+  domainOrEmail: string;
+  businessName?: string;
+  reason: CleanupReason | string;
+  suppressedAt: string;
+}
+
+export interface SearchHistoryEntry {
+  id: string;
+  query: string;
+  country: string;
+  industry: string;
+  city?: string;
+  timestamp: string;
+  resultsCount: number;
+}
+
+export interface AutoCleanupSettings {
+  enabled: boolean;
+  autoRemoveTestDays: number; // 0 = never, 7, 30, 90
+  autoArchiveInactiveDays: number; // 0 = never, 30, 60, 90
+  autoArchiveCompletedOppsDays: number; // 0 = never, 30, 60, 90
+}
+
+export interface DuplicateGroup {
+  id: string;
+  matchType: 'domain' | 'businessName' | 'email';
+  matchValue: string;
+  leads: Lead[];
+}
+
+export interface ToastNotice {
+  id: string;
+  message: string;
+  undoAction?: () => void;
+  type?: 'success' | 'info' | 'warning';
 }
 
 export interface OutreachLog {

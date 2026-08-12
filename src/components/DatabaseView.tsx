@@ -18,10 +18,20 @@ import {
   Building2,
   Users,
   Code2,
-  MessageSquare
+  MessageSquare,
+  Archive,
+  EyeOff,
+  CheckSquare,
+  Square,
+  Filter,
+  Layers,
+  RotateCcw,
+  X
 } from 'lucide-react';
-import { Lead, Temperature, ContactStatus } from '../types';
+import { Lead, Temperature, ContactStatus, CleanupReason } from '../types';
 import { createWhatsAppDeepLink, generateLeadWhatsAppPitch } from '../utils/whatsapp';
+import { LeadActionMenu } from './LeadActionMenu';
+import { ConfirmModal } from './ConfirmModal';
 
 interface DatabaseViewProps {
   leads: Lead[];
@@ -33,6 +43,15 @@ interface DatabaseViewProps {
   onSelectLeadForAudit: (lead: Lead) => void;
   onEnrichLead: (lead: Lead) => void;
   onExportExcel: () => void;
+  onArchiveLead?: (lead: Lead, reason?: CleanupReason) => void;
+  onSuppressLead?: (lead: Lead, reason?: CleanupReason) => void;
+  onTrashLead?: (lead: Lead, reason?: CleanupReason) => void;
+  onPermanentDeleteLead?: (lead: Lead) => void;
+  onRestoreLead?: (lead: Lead) => void;
+  onBulkArchive?: (leadIds: string[]) => void;
+  onBulkSuppress?: (leadIds: string[]) => void;
+  onBulkTrash?: (leadIds: string[]) => void;
+  onBulkDelete?: (leadIds: string[]) => void;
 }
 
 export const DatabaseView: React.FC<DatabaseViewProps> = ({
@@ -45,16 +64,52 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
   onSelectLeadForAudit,
   onEnrichLead,
   onExportExcel,
+  onArchiveLead,
+  onSuppressLead,
+  onTrashLead,
+  onPermanentDeleteLead,
+  onRestoreLead,
+  onBulkArchive,
+  onBulkSuppress,
+  onBulkTrash,
+  onBulkDelete,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [tempFilter, setTempFilter] = useState<string>('');
   const [statusFilter, setStatusFilter] = useState<string>('');
   const [countryFilter, setCountryFilter] = useState<string>('');
   const [industryFilter, setIndustryFilter] = useState<string>('');
+  const [recordStatusFilter, setRecordStatusFilter] = useState<'active' | 'archived' | 'suppressed' | 'trashed' | 'demo' | 'all'>('active');
   const [enrichingId, setEnrichingId] = useState<string | null>(null);
+
+  // Multi-select state
+  const [selectedLeadIds, setSelectedLeadIds] = useState<string[]>([]);
+
+  // Confirmation modal state
+  const [confirmModalState, setConfirmModalState] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    action: (reason?: CleanupReason) => void;
+    type?: 'danger' | 'warning' | 'archive' | 'suppress';
+    requireReason?: boolean;
+    itemCount?: number;
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    action: () => {},
+  });
 
   const filteredLeads = useMemo(() => {
     return leads.filter((lead) => {
+      // Record Status Filter
+      if (recordStatusFilter === 'active' && (lead.archived || lead.suppressed || lead.trashed)) return false;
+      if (recordStatusFilter === 'archived' && (!lead.archived || lead.trashed)) return false;
+      if (recordStatusFilter === 'suppressed' && (!lead.suppressed || lead.trashed)) return false;
+      if (recordStatusFilter === 'trashed' && !lead.trashed) return false;
+      if (recordStatusFilter === 'demo' && !lead.isDemo && !lead.id.startsWith('lead-')) return false;
+
       const matchSearch =
         searchTerm === '' ||
         lead.businessName.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -70,7 +125,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
 
       return matchSearch && matchTemp && matchStatus && matchCountry && matchIndustry;
     });
-  }, [leads, searchTerm, tempFilter, statusFilter, countryFilter, industryFilter]);
+  }, [leads, recordStatusFilter, searchTerm, tempFilter, statusFilter, countryFilter, industryFilter]);
 
   const uniqueCountries = useMemo(() => {
     return Array.from(new Set(leads.map((l) => l.country))).filter(Boolean);
@@ -79,6 +134,23 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
   const uniqueIndustries = useMemo(() => {
     return Array.from(new Set(leads.map((l) => l.industry))).filter(Boolean);
   }, [leads]);
+
+  // Selection Handlers
+  const handleToggleSelectAll = () => {
+    if (selectedLeadIds.length === filteredLeads.length) {
+      setSelectedLeadIds([]);
+    } else {
+      setSelectedLeadIds(filteredLeads.map((l) => l.id));
+    }
+  };
+
+  const handleToggleSelectLead = (id: string) => {
+    if (selectedLeadIds.includes(id)) {
+      setSelectedLeadIds((prev) => prev.filter((i) => i !== id));
+    } else {
+      setSelectedLeadIds((prev) => [...prev, id]);
+    }
+  };
 
   const getTemperatureBadge = (temp: Temperature) => {
     switch (temp) {
@@ -224,8 +296,136 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
         </div>
       </div>
 
-      {/* Filter Bar */}
-      <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm space-y-3">
+      {/* Record View Mode Tabs & Filter Bar */}
+      <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm space-y-4">
+        {/* Status Filter Selector Tabs */}
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
+          <div className="flex flex-wrap items-center gap-1.5 text-xs font-bold">
+            <button
+              onClick={() => { setRecordStatusFilter('active'); setSelectedLeadIds([]); }}
+              className={`px-3 py-1.5 rounded-lg transition ${
+                recordStatusFilter === 'active' ? 'bg-indigo-600 text-white font-extrabold shadow-sm' : 'text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              Active Leads ({leads.filter(l => !l.archived && !l.suppressed && !l.trashed).length})
+            </button>
+            <button
+              onClick={() => { setRecordStatusFilter('archived'); setSelectedLeadIds([]); }}
+              className={`px-3 py-1.5 rounded-lg transition ${
+                recordStatusFilter === 'archived' ? 'bg-amber-600 text-white font-extrabold shadow-sm' : 'text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              Archived ({leads.filter(l => l.archived && !l.trashed).length})
+            </button>
+            <button
+              onClick={() => { setRecordStatusFilter('suppressed'); setSelectedLeadIds([]); }}
+              className={`px-3 py-1.5 rounded-lg transition ${
+                recordStatusFilter === 'suppressed' ? 'bg-purple-600 text-white font-extrabold shadow-sm' : 'text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              Suppressed ({leads.filter(l => l.suppressed && !l.trashed).length})
+            </button>
+            <button
+              onClick={() => { setRecordStatusFilter('trashed'); setSelectedLeadIds([]); }}
+              className={`px-3 py-1.5 rounded-lg transition ${
+                recordStatusFilter === 'trashed' ? 'bg-rose-600 text-white font-extrabold shadow-sm' : 'text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              Trash Bin ({leads.filter(l => l.trashed).length})
+            </button>
+            <button
+              onClick={() => { setRecordStatusFilter('demo'); setSelectedLeadIds([]); }}
+              className={`px-3 py-1.5 rounded-lg transition ${
+                recordStatusFilter === 'demo' ? 'bg-blue-600 text-white font-extrabold shadow-sm' : 'text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              Demo Data ({leads.filter(l => l.isDemo || l.id.startsWith('lead-')).length})
+            </button>
+            <button
+              onClick={() => { setRecordStatusFilter('all'); setSelectedLeadIds([]); }}
+              className={`px-3 py-1.5 rounded-lg transition ${
+                recordStatusFilter === 'all' ? 'bg-slate-900 text-white font-extrabold shadow-sm' : 'text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              All Records ({leads.length})
+            </button>
+          </div>
+
+          {selectedLeadIds.length > 0 && (
+            <span className="text-xs font-bold text-indigo-700 bg-indigo-50 px-2.5 py-1 rounded-lg border border-indigo-200">
+              {selectedLeadIds.length} Selected
+            </span>
+          )}
+        </div>
+
+        {/* Bulk Action Bar when items selected */}
+        {selectedLeadIds.length > 0 && (
+          <div className="p-3 bg-indigo-950 text-white rounded-xl flex flex-wrap items-center justify-between gap-3 animate-fadeIn border border-indigo-800 shadow-md">
+            <div className="flex items-center gap-2 text-xs font-extrabold">
+              <CheckSquare className="w-4 h-4 text-emerald-400" />
+              <span>{selectedLeadIds.length} leads selected for bulk action</span>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 text-xs font-bold">
+              {onBulkArchive && (
+                <button
+                  onClick={() => onBulkArchive(selectedLeadIds)}
+                  className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded-lg transition flex items-center gap-1"
+                >
+                  <Archive className="w-3.5 h-3.5" /> Archive
+                </button>
+              )}
+
+              {onBulkSuppress && (
+                <button
+                  onClick={() => onBulkSuppress(selectedLeadIds)}
+                  className="px-3 py-1.5 bg-purple-600 hover:bg-purple-500 text-white rounded-lg transition flex items-center gap-1"
+                >
+                  <EyeOff className="w-3.5 h-3.5" /> Suppress
+                </button>
+              )}
+
+              {onBulkTrash && (
+                <button
+                  onClick={() => onBulkTrash(selectedLeadIds)}
+                  className="px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-lg transition flex items-center gap-1"
+                >
+                  <Trash2 className="w-3.5 h-3.5" /> Move to Trash
+                </button>
+              )}
+
+              {onBulkDelete && (
+                <button
+                  onClick={() => {
+                    setConfirmModalState({
+                      isOpen: true,
+                      title: `Permanently Delete ${selectedLeadIds.length} Selected Records?`,
+                      message: `Permanently remove ${selectedLeadIds.length} selected leads, notes, and activity history? This cannot be undone.`,
+                      action: () => {
+                        onBulkDelete(selectedLeadIds);
+                        setSelectedLeadIds([]);
+                      },
+                      type: 'danger',
+                      itemCount: selectedLeadIds.length,
+                    });
+                  }}
+                  className="px-3 py-1.5 bg-rose-900 hover:bg-rose-800 text-white rounded-lg transition flex items-center gap-1 font-extrabold"
+                >
+                  <X className="w-3.5 h-3.5" /> Delete Permanently
+                </button>
+              )}
+
+              <button
+                onClick={() => setSelectedLeadIds([])}
+                className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg transition text-xs"
+              >
+                Clear Selection
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Search & Secondary Filter Controls */}
         <div className="flex flex-col md:flex-row gap-3 items-center">
           <div className="relative flex-1 w-full">
             <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
@@ -299,6 +499,15 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
           <table className="w-full text-left text-xs">
             <thead className="bg-slate-50 text-slate-500 uppercase font-bold tracking-wider border-b border-slate-200">
               <tr>
+                <th className="p-3.5 w-10 text-center">
+                  <button onClick={handleToggleSelectAll} title="Select All Visible">
+                    {selectedLeadIds.length > 0 && selectedLeadIds.length === filteredLeads.length ? (
+                      <CheckSquare className="w-4 h-4 text-indigo-600" />
+                    ) : (
+                      <Square className="w-4 h-4 text-slate-400" />
+                    )}
+                  </button>
+                </th>
                 <th className="p-3.5">Business & Intelligence</th>
                 <th className="p-3.5">Contact Person</th>
                 <th className="p-3.5">Credibility</th>
@@ -312,125 +521,170 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
             <tbody className="divide-y divide-slate-200 text-slate-700">
               {filteredLeads.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="p-8 text-center text-slate-500">
-                    No matching client leads found.
+                  <td colSpan={9} className="p-8 text-center text-slate-500">
+                    No matching client leads found for this filter.
                   </td>
                 </tr>
               ) : (
-                filteredLeads.map((lead) => (
-                  <tr key={lead.id} className="hover:bg-slate-50/80 transition">
-                    <td className="p-3.5">
-                      <div className="font-bold text-slate-900 flex items-center gap-1.5">
-                        {lead.businessName}
-                        {lead.enrichment?.linkedinUrl && (
-                          <a
-                            href={lead.enrichment.linkedinUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-blue-600 hover:text-blue-800"
-                            title="LinkedIn Company Page"
-                          >
-                            <Linkedin className="w-3.5 h-3.5" />
-                          </a>
-                        )}
-                      </div>
-                      <div className="text-[11px] text-slate-500 flex items-center gap-2 mt-0.5">
-                        <span>{lead.industry}</span>
-                        {lead.enrichment?.employeeCount && (
-                          <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-medium">
-                            {lead.enrichment.employeeCount}
-                          </span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="p-3.5">
-                      <div className="font-medium text-slate-900">{lead.contactPerson}</div>
-                      <div className="text-[11px] text-slate-400">{lead.email}</div>
-                    </td>
-                    <td className="p-3.5">{renderCredibilityBadge(lead)}</td>
-                    <td className="p-3.5 text-indigo-600 font-medium">
-                      <a
-                        href={
-                          lead.website.startsWith('http')
-                            ? lead.website
-                            : `https://${lead.website}`
-                        }
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 hover:underline"
-                      >
-                        {lead.website} <ExternalLink className="w-3 h-3 text-slate-400" />
-                      </a>
-                    </td>
-                    <td className="p-3.5 font-extrabold text-sm text-slate-900">
-                      {lead.score}
-                    </td>
-                    <td className="p-3.5">{getTemperatureBadge(lead.temperature)}</td>
-                    <td className="p-3.5">{getStatusBadge(lead.contactStatus)}</td>
-                    <td className="p-3.5 text-right space-x-1">
-                      <a
-                        href={createWhatsAppDeepLink(
-                          lead.phone || '03075204612',
-                          generateLeadWhatsAppPitch(lead.contactPerson, lead.businessName, lead.score)
-                        )}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="p-1.5 hover:bg-emerald-50 rounded text-emerald-600 transition inline-block"
-                        title="Message on WhatsApp (wa.me Deep Link)"
-                      >
-                        <MessageSquare className="w-3.5 h-3.5 text-emerald-600" />
-                      </a>
-                      <button
-                        onClick={() => handleEnrich(lead)}
-                        disabled={enrichingId === lead.id}
-                        className="p-1.5 hover:bg-slate-100 rounded text-slate-600 transition"
-                        title="Enrich Profile (LinkedIn & Clearbit)"
-                      >
-                        <RefreshCw className={`w-3.5 h-3.5 text-blue-600 ${enrichingId === lead.id ? 'animate-spin' : ''}`} />
-                      </button>
-                      <button
-                        onClick={() => onSelectLeadForLinkedIn(lead)}
-                        className="p-1.5 hover:bg-blue-50 rounded text-blue-600 transition"
-                        title="LinkedIn Outreach"
-                      >
-                        <Linkedin className="w-3.5 h-3.5 text-blue-600" />
-                      </button>
-                      <button
-                        onClick={() => onSelectLeadForAudit(lead)}
-                        className="p-1.5 hover:bg-slate-100 rounded text-slate-600 transition"
-                        title="Website Audit"
-                      >
-                        <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
-                      </button>
-                      <button
-                        onClick={() => onSelectLeadForEmail(lead)}
-                        className="p-1.5 hover:bg-slate-100 rounded text-slate-600 transition"
-                        title="Draft Email"
-                      >
-                        <Send className="w-3.5 h-3.5 text-indigo-600" />
-                      </button>
-                      <button
-                        onClick={() => onEditLead(lead)}
-                        className="p-1.5 hover:bg-slate-100 rounded text-slate-600 transition"
-                        title="Edit Lead"
-                      >
-                        <Edit3 className="w-3.5 h-3.5 text-slate-600" />
-                      </button>
-                      <button
-                        onClick={() => onDeleteLead(lead.id)}
-                        className="p-1.5 hover:bg-rose-50 rounded text-rose-600 transition"
-                        title="Delete Lead"
-                      >
-                        <Trash2 className="w-3.5 h-3.5 text-rose-500" />
-                      </button>
-                    </td>
-                  </tr>
-                ))
+                filteredLeads.map((lead) => {
+                  const isSelected = selectedLeadIds.includes(lead.id);
+
+                  return (
+                    <tr 
+                      key={lead.id} 
+                      className={`hover:bg-slate-50/80 transition ${isSelected ? 'bg-indigo-50/40' : ''}`}
+                    >
+                      <td className="p-3.5 text-center">
+                        <button onClick={() => handleToggleSelectLead(lead.id)}>
+                          {isSelected ? (
+                            <CheckSquare className="w-4 h-4 text-indigo-600" />
+                          ) : (
+                            <Square className="w-4 h-4 text-slate-300 hover:text-slate-400" />
+                          )}
+                        </button>
+                      </td>
+
+                      <td className="p-3.5">
+                        <div className="font-bold text-slate-900 flex items-center gap-1.5">
+                          {lead.businessName}
+                          {lead.archived && (
+                            <span className="text-[9px] bg-amber-100 text-amber-800 px-1.5 py-0.2 rounded font-black uppercase">
+                              Archived
+                            </span>
+                          )}
+                          {lead.suppressed && (
+                            <span className="text-[9px] bg-purple-100 text-purple-800 px-1.5 py-0.2 rounded font-black uppercase">
+                              Suppressed
+                            </span>
+                          )}
+                          {lead.trashed && (
+                            <span className="text-[9px] bg-rose-100 text-rose-800 px-1.5 py-0.2 rounded font-black uppercase">
+                              Trash
+                            </span>
+                          )}
+                          {lead.enrichment?.linkedinUrl && (
+                            <a
+                              href={lead.enrichment.linkedinUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-blue-600 hover:text-blue-800"
+                              title="LinkedIn Company Page"
+                            >
+                              <Linkedin className="w-3.5 h-3.5" />
+                            </a>
+                          )}
+                        </div>
+                        <div className="text-[11px] text-slate-500 flex items-center gap-2 mt-0.5">
+                          <span>{lead.industry}</span>
+                          {lead.enrichment?.employeeCount && (
+                            <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-medium">
+                              {lead.enrichment.employeeCount}
+                            </span>
+                          )}
+                        </div>
+                      </td>
+
+                      <td className="p-3.5">
+                        <div className="font-medium text-slate-900">{lead.contactPerson}</div>
+                        <div className="text-[11px] text-slate-400">{lead.email}</div>
+                      </td>
+
+                      <td className="p-3.5">{renderCredibilityBadge(lead)}</td>
+
+                      <td className="p-3.5 text-indigo-600 font-medium">
+                        <a
+                          href={
+                            lead.website.startsWith('http')
+                              ? lead.website
+                              : `https://${lead.website}`
+                          }
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 hover:underline"
+                        >
+                          {lead.website} <ExternalLink className="w-3 h-3 text-slate-400" />
+                        </a>
+                      </td>
+
+                      <td className="p-3.5 font-extrabold text-sm text-slate-900">
+                        {lead.score}
+                      </td>
+
+                      <td className="p-3.5">{getTemperatureBadge(lead.temperature)}</td>
+
+                      <td className="p-3.5">{getStatusBadge(lead.contactStatus)}</td>
+
+                      <td className="p-3.5 text-right space-x-1">
+                        <a
+                          href={createWhatsAppDeepLink(
+                            lead.phone || '03075204612',
+                            generateLeadWhatsAppPitch(lead.contactPerson, lead.businessName, lead.score)
+                          )}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="p-1.5 hover:bg-emerald-50 rounded text-emerald-600 transition inline-block"
+                          title="Message on WhatsApp"
+                        >
+                          <MessageSquare className="w-3.5 h-3.5 text-emerald-600" />
+                        </a>
+
+                        <button
+                          onClick={() => handleEnrich(lead)}
+                          disabled={enrichingId === lead.id}
+                          className="p-1.5 hover:bg-slate-100 rounded text-slate-600 transition"
+                          title="Enrich Profile"
+                        >
+                          <RefreshCw className={`w-3.5 h-3.5 text-blue-600 ${enrichingId === lead.id ? 'animate-spin' : ''}`} />
+                        </button>
+
+                        <button
+                          onClick={() => onSelectLeadForEmail(lead)}
+                          className="p-1.5 hover:bg-slate-100 rounded text-slate-600 transition"
+                          title="Draft Email"
+                        >
+                          <Send className="w-3.5 h-3.5 text-indigo-600" />
+                        </button>
+
+                        {/* Universal Action Dropdown Menu */}
+                        <LeadActionMenu
+                          lead={lead}
+                          onViewDetails={() => onEditLead(lead)}
+                          onAudit={() => onSelectLeadForAudit(lead)}
+                          onGenerateOutreach={() => onSelectLeadForEmail(lead)}
+                          onArchive={onArchiveLead}
+                          onSuppress={onSuppressLead}
+                          onTrash={onTrashLead}
+                          onRestore={onRestoreLead}
+                          onPermanentDelete={(l) => {
+                            setConfirmModalState({
+                              isOpen: true,
+                              title: `Permanently Delete ${l.businessName}?`,
+                              message: `Are you sure you want to permanently delete ${l.businessName}? Lead information, activity history, and notes will be lost permanently.`,
+                              action: () => onPermanentDeleteLead?.(l),
+                              type: 'danger',
+                            });
+                          }}
+                        />
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>
         </div>
       </div>
+
+      <ConfirmModal
+        isOpen={confirmModalState.isOpen}
+        onClose={() => setConfirmModalState((prev) => ({ ...prev, isOpen: false }))}
+        onConfirm={confirmModalState.action}
+        title={confirmModalState.title}
+        message={confirmModalState.message}
+        type={confirmModalState.type}
+        itemCount={confirmModalState.itemCount}
+        confirmText="Proceed"
+      />
     </div>
   );
 };

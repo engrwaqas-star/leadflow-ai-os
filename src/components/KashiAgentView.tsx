@@ -37,6 +37,7 @@ import {
   CheckSquare
 } from 'lucide-react';
 import { Lead, UserProfile, KashiTaskItem, KashiAutopilotSettings, KashiLogEntry, SentColdEmailRecord, TeamWorkDoneRecord } from '../types';
+import { loggedFetch } from '../utils/apiLogger';
 
 interface KashiAgentViewProps {
   leads: Lead[];
@@ -285,16 +286,19 @@ export const KashiAgentView: React.FC<KashiAgentViewProps> = ({
             notes: (lead.notes || '') + `\n[Agent Kashi Autopilot]: Auto-dispatched cold outreach email highlighting ${profile.name}'s Full Stack Web & Speed Optimization skills.`,
           });
 
+          const specificNeed = lead.auditIssue || lead.websiteStatus || 'mobile responsiveness & sub-second page load optimization';
+          const suggestedSolution = lead.suggestedService || 'Custom React SPA & High-Speed Mobile Booking Funnel';
+
           newlyDispatchedMails.push({
             id: `sent-auto-${Date.now()}-${lead.id}`,
             leadId: lead.id,
             leadName: lead.businessName,
             recipientEmail: lead.email || `contact@${lead.website}`,
             website: lead.website,
-            subject: `Sub-second Website & Conversion Rebuild for ${lead.businessName}`,
-            emailBody: `Hi ${lead.contactPerson || 'Team'},\n\nI reviewed ${lead.website} and noticed load speed and mobile bottlenecks that cost potential customers.\n\nMy name is ${profile.name}, a Full Stack Developer skilled in React, Node, and sub-second PageSpeed optimizations (99/100).\n\nHere is my portfolio: ${profile.portfolioUrl}\n\nLet me know if you'd like a free 40-second video walkthrough of the proposed solution!\n\nBest,\n${profile.name}`,
+            subject: `Observation regarding ${lead.businessName}'s ${lead.industry} portal & ${specificNeed.slice(0, 45)}`,
+            emailBody: `Hi ${lead.contactPerson || 'there'},\n\nI was reviewing top ${lead.industry} businesses in ${lead.city || lead.country || 'your area'} and noticed ${lead.businessName} has fantastic market positioning.\n\nHowever, while auditing ${lead.website}, I observed a specific technical gap: ${specificNeed}.\n\nAs a Frontend Web Architect (${profile.name}), I specialize in building ${suggestedSolution} to capture lost leads and boost conversions.\n\nMind if I send over a 2-minute video walkthrough showing how we can resolve this for ${lead.businessName}?\n\nBest regards,\n${profile.name}\n${profile.title}\nPortfolio: ${profile.portfolioUrl}`,
             sentAt: `${todayDateStr} ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
-            skillsHighlighted: ['React 18', 'Sub-second PageSpeed (99/100)', 'Mobile Responsive UI'],
+            skillsHighlighted: ['React 18 / Node.js', 'Sub-second PageSpeed', 'Mobile Conversion Funnels'],
             status: 'Delivered',
           });
         });
@@ -333,7 +337,7 @@ export const KashiAgentView: React.FC<KashiAgentViewProps> = ({
     }, 1500);
   };
 
-  const handleSendChatCommand = (customPrompt?: string) => {
+  const handleSendChatCommand = async (customPrompt?: string) => {
     const textToSend = customPrompt || chatInput;
     if (!textToSend.trim()) return;
 
@@ -347,68 +351,98 @@ export const KashiAgentView: React.FC<KashiAgentViewProps> = ({
     if (!customPrompt) setChatInput('');
     setIsProcessingCommand(true);
 
-    setTimeout(() => {
-      let responseText = '';
-      let actionTaken: string | undefined = undefined;
+    const lower = textToSend.toLowerCase();
 
-      const lower = textToSend.toLowerCase();
+    // Check if it's a specific action command
+    if (lower.includes('send') || lower.includes('outreach') || lower.includes('dispatch') || lower.includes('30')) {
+      const uncontacted = leads.filter((l) => l.contactStatus === 'Not Contacted');
+      const count = Math.min(uncontacted.length, 5);
 
-      if (lower.includes('send') || lower.includes('outreach') || lower.includes('dispatch') || lower.includes('30')) {
-        const uncontacted = leads.filter((l) => l.contactStatus === 'Not Contacted');
-        const count = Math.min(uncontacted.length, 5);
-
-        if (count > 0) {
-          const newMails: SentColdEmailRecord[] = [];
-          uncontacted.slice(0, count).forEach((l) => {
-            onUpdateLead({
-              ...l,
-              contactStatus: 'Contacted',
-              lastContactDate: todayDateStr,
-            });
-
-            newMails.push({
-              id: `sent-chat-${Date.now()}-${l.id}`,
-              leadId: l.id,
-              leadName: l.businessName,
-              recipientEmail: l.email || `info@${l.website}`,
-              website: l.website,
-              subject: `Full Stack React Rebuild & Speed Boost for ${l.businessName}`,
-              emailBody: `Hi ${l.contactPerson || 'Team'},\n\nI analyzed your site ${l.website} and noticed key speed bottlenecks. As a Full Stack Developer (${profile.name}), I build high-performing React web apps that load in under 1 second.\n\nLet's connect!\n\nBest,\n${profile.name}`,
-              sentAt: `${todayDateStr} ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
-              skillsHighlighted: ['React App', '99 PageSpeed Score', 'Mobile Layout'],
-              status: 'Delivered',
-            });
+      if (count > 0) {
+        const newMails: SentColdEmailRecord[] = [];
+        uncontacted.slice(0, count).forEach((l) => {
+          onUpdateLead({
+            ...l,
+            contactStatus: 'Contacted',
+            lastContactDate: todayDateStr,
           });
 
-          setSentColdMails((prev) => [...newMails, ...prev]);
+          newMails.push({
+            id: `sent-chat-${Date.now()}-${l.id}`,
+            leadId: l.id,
+            leadName: l.businessName,
+            recipientEmail: l.email || `info@${l.website}`,
+            website: l.website,
+            subject: `Full Stack React Rebuild & Speed Boost for ${l.businessName}`,
+            emailBody: `Hi ${l.contactPerson || 'Team'},\n\nI analyzed your site ${l.website} and noticed key speed bottlenecks. As a Full Stack Developer (${profile.name}), I build high-performing React web apps that load in under 1 second.\n\nLet's connect!\n\nBest,\n${profile.name}`,
+            sentAt: `${todayDateStr} ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
+            skillsHighlighted: ['React App', '99 PageSpeed Score', 'Mobile Layout'],
+            status: 'Delivered',
+          });
+        });
 
-          responseText = `Dispatched cold email pitches to **${count} leads** emphasizing your Full Stack React & PageSpeed skills. Check the **Outreached Cold Emails** tab to inspect full messages!`;
-          actionTaken = `Sent ${count} cold emails automatically.`;
-        } else {
-          responseText = `Your daily total is **${contactedTodayCount} / 30**. You have already reached available leads today!`;
-        }
-      } else if (lower.includes('reply') || lower.includes('inbox') || lower.includes('opportunity')) {
-        responseText = `I scanned your inbox for replies. You have **1 hot opportunity** (${leads[0]?.businessName || 'Apex Dental Care'}). I drafted a high-converting proposal referencing your portfolio (${profile.portfolioUrl}).`;
-        actionTaken = `Drafted high-intent proposal response.`;
-      } else if (lower.includes('task') || lower.includes('team') || lower.includes('work')) {
-        setActiveSubTab('team_work');
-        responseText = `Navigating to **Team Work Tracker**! Here you can see all completed technical tasks, deliverables, and PageSpeed metrics completed by your employees.`;
-        actionTaken = `Opened Team Work Tracker.`;
+        setSentColdMails((prev) => [...newMails, ...prev]);
+
+        setChatMessages((prev) => [
+          ...prev,
+          {
+            sender: 'kashi',
+            text: `Dispatched cold email pitches to **${count} leads** emphasizing your Full Stack React & PageSpeed skills. Check the **Outreached Cold Emails** tab to inspect full messages!`,
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            actionTaken: `Sent ${count} cold emails automatically.`,
+          },
+        ]);
       } else {
-        responseText = `Got it, ${profile.name}! I am tracking your **30 daily outreach target** (${contactedTodayCount}/30 completed). I can automatically send cold emails, capture real client site viewports, or log team deliverables anytime!`;
+        setChatMessages((prev) => [
+          ...prev,
+          {
+            sender: 'kashi',
+            text: `Your daily total is **${contactedTodayCount} / 30**. You have already reached available leads today!`,
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          },
+        ]);
       }
+      setIsProcessingCommand(false);
+      return;
+    }
 
+    // Call AI Endpoint for general chat and strategy queries
+    try {
+      const { ok, data } = await loggedFetch('/api/ai/kashi-chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userMessage: textToSend,
+          developerProfile: profile,
+          leadsCount: leads.length,
+          contactedTodayCount,
+        }),
+      });
+
+      if (ok && data?.success && data.replyText) {
+        setChatMessages((prev) => [
+          ...prev,
+          {
+            sender: 'kashi',
+            text: data.replyText,
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          },
+        ]);
+      } else {
+        throw new Error('Fallback needed');
+      }
+    } catch (err) {
       setChatMessages((prev) => [
         ...prev,
         {
           sender: 'kashi',
-          text: responseText,
+          text: `Understood, ${profile.name}! As Agent Kashi, I am tracking your target ($2,000+ project value opportunities) and your **30 daily outreach quota** (${contactedTodayCount}/30 completed). Let's generate a proposal, audit a domain, or dispatch cold outreach!`,
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          actionTaken,
         },
       ]);
+    } finally {
       setIsProcessingCommand(false);
-    }, 1000);
+    }
   };
 
   const handleAddNewTask = (e: React.FormEvent) => {
