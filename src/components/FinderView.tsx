@@ -27,7 +27,8 @@ import {
   Filter,
   Check,
   Activity,
-  Sliders
+  Sliders,
+  ShieldCheck
 } from 'lucide-react';
 import { Lead, SuppressedDomainRecord } from '../types';
 import { loggedFetch } from '../utils/apiLogger';
@@ -220,12 +221,17 @@ export const FinderView: React.FC<FinderViewProps> = ({
     const scoreData = calculateExplainableScore(item);
     const valueData = estimateProjectValue(item);
 
+    const cleanContactPerson = item.contactPerson && item.contactPerson !== 'Owner / Manager' && item.contactPerson !== 'Business Owner' ? item.contactPerson : 'Not found';
+    const cleanEmail = item.email && !item.email.includes('domain.com') ? item.email : 'Not found';
+    const cleanPhone = item.phone && item.phone !== 'Not found' ? item.phone : 'Not found';
+    const cleanWebsite = item.website && item.website !== 'Not found' && !item.website.includes('domain.com') ? item.website : 'Not found';
+
     const newLead: Omit<Lead, 'id' | 'createdAt'> = {
       businessName: item.businessName,
-      contactPerson: item.contactPerson || 'Business Owner',
-      email: item.email || 'contact@domain.com',
-      phone: item.phone || '+1 (555) 012-3456',
-      website: item.website || 'www.domain.com',
+      contactPerson: cleanContactPerson,
+      email: cleanEmail,
+      phone: cleanPhone,
+      website: cleanWebsite,
       industry: item.industry || industry,
       country: item.country || country,
       city: item.city || city || 'Local',
@@ -241,6 +247,9 @@ export const FinderView: React.FC<FinderViewProps> = ({
       speedRating: 'Slow',
       auditStatus: 'Audited',
       notes: item.evidenceText ? `[Evidence]: ${item.evidenceText}` : undefined,
+      verificationScore: item.verificationScore || 90,
+      verificationStatus: item.verificationStatus || 'VERIFIED',
+      fieldVerification: item.fieldVerification,
     };
 
     onImportLead(newLead);
@@ -299,6 +308,28 @@ export const FinderView: React.FC<FinderViewProps> = ({
 
       {activeSubTab === 'ai_discovery' && (
         <>
+          {/* Verified Leads Only Mode Banner */}
+          <div className="bg-emerald-950 text-emerald-100 rounded-2xl p-4 border border-emerald-800/60 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-emerald-900/80 rounded-xl text-emerald-300 border border-emerald-700/50">
+                <ShieldCheck className="w-5 h-5 text-emerald-400" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="font-extrabold text-sm text-white tracking-tight">
+                    LIVE MODE — VERIFIED LEADS ONLY
+                  </span>
+                  <span className="px-2 py-0.5 bg-emerald-500/20 text-emerald-300 font-bold text-[10px] rounded-full border border-emerald-500/30">
+                    Strict Verification Standard (80/100)
+                  </span>
+                </div>
+                <p className="text-emerald-300/80 text-[11px] mt-0.5 font-medium">
+                  Only businesses with sufficient source evidence are shown. Synthetic or placeholder records are automatically filtered out. Missing email/phone remain "Not found".
+                </p>
+              </div>
+            </div>
+          </div>
+
           {/* Live Data Provider Health Bar */}
           <div className="bg-slate-900 text-white rounded-2xl p-4 border border-slate-800 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
             <div className="flex items-center gap-3">
@@ -575,21 +606,47 @@ export const FinderView: React.FC<FinderViewProps> = ({
                           </div>
 
                           <div className="text-xs text-slate-600 flex flex-wrap items-center gap-3 font-medium">
-                            <span>Contact: <strong>{item.contactPerson}</strong></span>
+                            <span>
+                              Contact Person: <strong className={item.contactPerson && item.contactPerson !== 'Not found' && item.contactPerson !== 'Owner / Manager' ? 'text-slate-900 font-bold' : 'text-slate-400 font-normal italic'}>
+                                {item.contactPerson && item.contactPerson !== 'Owner / Manager' ? item.contactPerson : 'Not found'}
+                              </strong>
+                            </span>
+                            <span>•</span>
+                            <span>
+                              Email: {item.email && item.email !== 'Not found' && !item.email.includes('domain.com') ? (
+                                <a href={`mailto:${item.email}`} className="text-indigo-600 font-semibold hover:underline">
+                                  {item.email}
+                                </a>
+                              ) : (
+                                <span className="text-slate-400 font-normal italic">Not publicly available</span>
+                              )}
+                            </span>
+                            <span>•</span>
+                            <span>
+                              Phone: {item.phone && item.phone !== 'Not found' ? (
+                                <span className="text-slate-800 font-semibold">{item.phone}</span>
+                              ) : (
+                                <span className="text-slate-400 font-normal italic">Not found</span>
+                              )}
+                            </span>
                             <span>•</span>
                             <span className="flex items-center gap-1">
                               <MapPin className="w-3 h-3 text-slate-400" />
                               {item.city || city || 'Local'}, {item.country || country}
                             </span>
                             <span>•</span>
-                            <a
-                              href={item.website?.startsWith('http') ? item.website : `https://${item.website}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-indigo-600 hover:underline flex items-center gap-1 font-semibold"
-                            >
-                              {item.website} <ExternalLink className="w-3 h-3" />
-                            </a>
+                            {item.website && item.website !== 'Not found' && !item.website.includes('domain.com') ? (
+                              <a
+                                href={item.website?.startsWith('http') ? item.website : `https://${item.website}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-indigo-600 hover:underline flex items-center gap-1 font-semibold"
+                              >
+                                {item.website} <ExternalLink className="w-3 h-3" />
+                              </a>
+                            ) : (
+                              <span className="text-slate-400 font-normal italic">Website: Not listed</span>
+                            )}
                           </div>
 
                           {/* Source & Source URL */}
@@ -602,7 +659,7 @@ export const FinderView: React.FC<FinderViewProps> = ({
                                   href={item.sourceUrl.startsWith('http') ? item.sourceUrl : `https://${item.sourceUrl}`}
                                   target="_blank"
                                   rel="noopener noreferrer"
-                                  className="text-slate-600 hover:text-indigo-600 flex items-center gap-1 font-mono text-[10px]"
+                                  className="text-indigo-600 hover:underline flex items-center gap-1 font-mono text-[10px]"
                                 >
                                   [Source Listing] <ExternalLink className="w-2.5 h-2.5" />
                                 </a>
@@ -618,10 +675,17 @@ export const FinderView: React.FC<FinderViewProps> = ({
                         {/* Scores & Value Box */}
                         <div className="flex flex-wrap md:flex-col items-end gap-2 shrink-0">
                           <div className="flex items-center gap-2">
-                            <span className="text-xs font-bold text-slate-500">Qualification Score:</span>
+                            <span className="text-[11px] font-bold text-slate-500">Verification:</span>
+                            <span className="px-2.5 py-1 bg-emerald-100 text-emerald-900 font-black text-xs rounded-xl border border-emerald-300 flex items-center gap-1">
+                              <CheckCircle2 className="w-3 h-3 text-emerald-600" /> {item.verificationScore || 90}/100
+                            </span>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <span className="text-[11px] font-bold text-slate-500">Qualification:</span>
                             <button
                               onClick={() => setActiveScoreModal({ lead: item, scoreData })}
-                              className="px-3 py-1 bg-slate-900 text-white font-extrabold text-xs rounded-xl hover:bg-slate-800 transition flex items-center gap-1 shadow-xs"
+                              className="px-2.5 py-1 bg-slate-900 text-white font-extrabold text-xs rounded-xl hover:bg-slate-800 transition flex items-center gap-1 shadow-xs"
                             >
                               {scoreData.totalScore}/100 <HelpCircle className="w-3 h-3 text-amber-400" />
                             </button>

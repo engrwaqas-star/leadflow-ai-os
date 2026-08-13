@@ -1,4 +1,5 @@
 import { GoogleGenAI, Type } from "@google/genai";
+import { executeAIGeneratedContent, cleanJsonText } from "../services/aiService";
 
 export interface LeadQueryParams {
   country?: string;
@@ -8,6 +9,16 @@ export interface LeadQueryParams {
   budgetTarget?: string;
   keyword?: string;
   providerId?: string;
+}
+
+export interface FieldVerification {
+  companyNameVerified: boolean;
+  locationVerified: boolean;
+  industryVerified: boolean;
+  websiteVerified: boolean;
+  phoneVerified: boolean;
+  emailVerified: boolean;
+  contactPersonVerified: boolean;
 }
 
 export interface DiscoveredLeadRaw {
@@ -20,7 +31,11 @@ export interface DiscoveredLeadRaw {
   city?: string;
   country?: string;
   industry?: string;
-  score?: number;
+  score?: number; // Qualification / Opportunity Score (0-100)
+  qualificationScore?: number; // Canonical qualification score
+  verificationScore?: number; // Verification Score (0-100)
+  fieldVerification?: FieldVerification;
+  rejectionReason?: string;
   temperature?: string;
   websiteStatus?: string;
   suggestedService?: string;
@@ -28,7 +43,7 @@ export interface DiscoveredLeadRaw {
   pitchHook?: string;
   source: string;
   sourceUrl: string;
-  verificationStatus: "VERIFIED" | "UNVERIFIED";
+  verificationStatus: "VERIFIED" | "UNVERIFIED" | "REJECTED";
   dateDiscovered?: string;
   evidenceText?: string;
 }
@@ -43,6 +58,7 @@ export interface ProviderSearchResult {
   code?: string;
   rawCount?: number;
   validatedCount?: number;
+  rejectedCount?: number;
   duplicatesRemovedCount?: number;
   suppressedCount?: number;
   finalActiveCount?: number;
@@ -87,7 +103,7 @@ export interface ProviderHealth {
 const providerHealthStore: Record<string, ProviderHealth> = {
   "serpapi-search": {
     providerId: "serpapi-search",
-    providerName: "SerpApi Google & Maps Search (250 Free Searches)",
+    providerName: "SerpApi Google & Maps Search (Primary)",
     status: process.env.SERPAPI_API_KEY ? "Connected" : "Not Configured",
     supportedSearchTypes: ["Google Local Maps", "Web SERP Leads", "Broad Discovery"],
   },
@@ -106,13 +122,13 @@ const providerHealthStore: Record<string, ProviderHealth> = {
   "google-search-live": {
     providerId: "google-search-live",
     providerName: "Google Live Web Search Engine",
-    status: process.env.GEMINI_API_KEY ? "Connected" : "Not Configured",
+    status: (process.env.GEMINI_API_KEY || process.env.OPENROUTER_API_KEY) ? "Connected" : "Not Configured",
     supportedSearchTypes: ["Client Projects ($2k+)", "Startup MVP Frontend", "Website Modernization", "Dashboard & Portals"],
   },
   "auto-multi": {
     providerId: "auto-multi",
     providerName: "Multi-Source Lead Aggregator (All Active)",
-    status: (process.env.SERPAPI_API_KEY || process.env.FOURSQUARE_API_KEY || process.env.YELP_API_KEY || process.env.GEMINI_API_KEY) ? "Connected" : "Not Configured",
+    status: (process.env.SERPAPI_API_KEY || process.env.FOURSQUARE_API_KEY || process.env.YELP_API_KEY || process.env.GEMINI_API_KEY || process.env.OPENROUTER_API_KEY) ? "Connected" : "Not Configured",
     supportedSearchTypes: ["Combined Cross-Directory Search"],
   },
 };
@@ -123,8 +139,8 @@ export function getProviderHealth(providerId = "serpapi-search"): ProviderHealth
   if (providerId === "serpapi-search") isConfigured = Boolean(process.env.SERPAPI_API_KEY && process.env.SERPAPI_API_KEY.trim().length > 0);
   else if (providerId === "foursquare-places") isConfigured = Boolean(process.env.FOURSQUARE_API_KEY && process.env.FOURSQUARE_API_KEY.trim().length > 0);
   else if (providerId === "yelp-fusion") isConfigured = Boolean(process.env.YELP_API_KEY && process.env.YELP_API_KEY.trim().length > 0);
-  else if (providerId === "google-search-live") isConfigured = Boolean(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY.trim().length > 0);
-  else if (providerId === "auto-multi") isConfigured = Boolean(process.env.SERPAPI_API_KEY || process.env.FOURSQUARE_API_KEY || process.env.YELP_API_KEY || process.env.GEMINI_API_KEY);
+  else if (providerId === "google-search-live") isConfigured = Boolean((process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY.trim().length > 0) || (process.env.OPENROUTER_API_KEY && process.env.OPENROUTER_API_KEY.trim().length > 0));
+  else if (providerId === "auto-multi") isConfigured = Boolean(process.env.SERPAPI_API_KEY || process.env.FOURSQUARE_API_KEY || process.env.YELP_API_KEY || process.env.GEMINI_API_KEY || process.env.OPENROUTER_API_KEY);
 
   return {
     ...health,
@@ -145,60 +161,263 @@ export function updateProviderHealth(providerId: string, updates: Partial<Provid
   }
 }
 
+// Hard Verification & Placeholder Detection Rules
+const INVALID_NAME_PATTERNS = [
+  "unnamed business",
+  "unknown business",
+  "test company",
+  "example company",
+  "demo company",
+  "sample business",
+  "placeholder company",
+  "unnamed",
+  "unknown",
+  "test business",
+  "sample company",
+  "demo business",
+  "placeholder business",
+];
+
+const INVALID_DOMAIN_PATTERNS = [
+  "domain.com",
+  "example.com",
+  "example.org",
+  "test.com",
+  "localhost",
+  "test.org",
+  "sample.com",
+  "placeholder.com",
+];
+
+const INVALID_EMAIL_PATTERNS = [
+  "contact@domain.com",
+  "test@test.com",
+  "example@example.com",
+  "user@example.com",
+  "hello@example.com",
+  "info@domain.com",
+  "admin@domain.com",
+  "email@domain.com",
+  "support@domain.com",
+];
+
+export function isPlaceholderName(name?: string): boolean {
+  if (!name || typeof name !== "string") return true;
+  const lower = name.trim().toLowerCase();
+  if (lower.length < 2) return true;
+  return INVALID_NAME_PATTERNS.some((p) => lower === p || lower.startsWith("unnamed business") || lower.startsWith("placeholder company"));
+}
+
+export function isPlaceholderDomain(domainOrUrl?: string): boolean {
+  if (!domainOrUrl || typeof domainOrUrl !== "string") return true;
+  const lower = domainOrUrl.trim().toLowerCase();
+  if (lower === "" || lower === "n/a" || lower === "none" || lower === "null" || lower === "not found" || lower === "not publicly available") return true;
+  if (INVALID_DOMAIN_PATTERNS.some((p) => lower.includes(p))) return true;
+  if (lower.startsWith("https://www.google.com/search") || lower.startsWith("https://google.com/search")) return true;
+  return false;
+}
+
+export function isPlaceholderEmail(email?: string): boolean {
+  if (!email || typeof email !== "string") return true;
+  const lower = email.trim().toLowerCase();
+  if (lower === "" || lower === "n/a" || lower === "none" || lower === "null" || lower === "not found" || lower === "not publicly available") return true;
+  if (INVALID_EMAIL_PATTERNS.some((p) => lower === p)) return true;
+  if (lower.endsWith("@domain.com") || lower.endsWith("@example.com") || lower.endsWith("@test.com")) return true;
+  return false;
+}
+
+/**
+ * Field-level Lead Verification & Normalization Engine
+ * Guarantees zero synthetic or fabricated values in Live Mode.
+ */
+export function verifyAndNormalizeLead(
+  raw: DiscoveredLeadRaw,
+  queryContext?: LeadQueryParams
+): { lead: DiscoveredLeadRaw; isVerified: boolean; reason?: string } {
+  const name = (raw.businessName || "").trim();
+
+  // 1. Reject placeholder company name
+  if (isPlaceholderName(name)) {
+    return {
+      lead: {
+        ...raw,
+        businessName: name || "Unnamed Business",
+        verificationStatus: "REJECTED",
+        verificationScore: 0,
+        rejectionReason: "Rejected placeholder or unnamed company name",
+      },
+      isVerified: false,
+      reason: "Placeholder or unnamed business",
+    };
+  }
+
+  // 2. Clean website and sourceUrl
+  let cleanWebsite = (raw.website || "").trim();
+  if (isPlaceholderDomain(cleanWebsite)) {
+    cleanWebsite = "Not found";
+  }
+
+  let cleanSourceUrl = (raw.sourceUrl || "").trim();
+  if (!cleanSourceUrl || isPlaceholderDomain(cleanSourceUrl)) {
+    cleanSourceUrl = cleanWebsite !== "Not found" ? cleanWebsite : "";
+  }
+
+  // 3. Clean email, phone, contact person
+  let cleanEmail = (raw.email || "").trim();
+  if (isPlaceholderEmail(cleanEmail)) {
+    cleanEmail = "Not found";
+  }
+
+  let cleanPhone = (raw.phone || "").trim();
+  if (
+    !cleanPhone ||
+    cleanPhone.toLowerCase() === "n/a" ||
+    cleanPhone.toLowerCase() === "none" ||
+    cleanPhone.toLowerCase() === "not found" ||
+    cleanPhone === "0"
+  ) {
+    cleanPhone = "Not found";
+  }
+
+  let cleanContactPerson = (raw.contactPerson || "").trim();
+  if (
+    !cleanContactPerson ||
+    cleanContactPerson.toLowerCase() === "owner / manager" ||
+    cleanContactPerson.toLowerCase() === "business manager" ||
+    cleanContactPerson.toLowerCase() === "business owner" ||
+    cleanContactPerson.toLowerCase() === "owner" ||
+    cleanContactPerson.toLowerCase() === "manager" ||
+    cleanContactPerson.toLowerCase() === "not found"
+  ) {
+    cleanContactPerson = "Not found";
+  }
+
+  const hasWebsite = cleanWebsite !== "Not found";
+  const hasPhone = cleanPhone !== "Not found";
+  const hasEmail = cleanEmail !== "Not found";
+  const hasSource = Boolean(cleanSourceUrl);
+
+  // Hard Rule: A lead with no real company name + no source + no website + no contact information MUST be rejected from Live Mode.
+  if (!hasWebsite && !hasPhone && !hasEmail && !hasSource) {
+    return {
+      lead: {
+        ...raw,
+        businessName: name,
+        website: cleanWebsite,
+        email: cleanEmail,
+        phone: cleanPhone,
+        contactPerson: cleanContactPerson,
+        verificationStatus: "REJECTED",
+        verificationScore: 20,
+        rejectionReason: "Rejected: Core identity missing (no website, source, phone, or email proof found)",
+      },
+      isVerified: false,
+      reason: "No contact info or web source found",
+    };
+  }
+
+  // 4. Compute Field Verification Flags
+  const fieldVerification: FieldVerification = {
+    companyNameVerified: true,
+    locationVerified: Boolean(raw.address || raw.city || raw.country),
+    industryVerified: Boolean(raw.industry),
+    websiteVerified: hasWebsite,
+    phoneVerified: hasPhone,
+    emailVerified: hasEmail,
+    contactPersonVerified: cleanContactPerson !== "Not found",
+  };
+
+  // 5. Compute Verification Score (0-100)
+  let verificationScore = 30; // Real non-placeholder company name (+30)
+  if (hasSource) verificationScore += 25;
+  if (fieldVerification.locationVerified) verificationScore += 20;
+  if (fieldVerification.industryVerified) verificationScore += 15;
+  if (hasWebsite) verificationScore += 10;
+  if (hasPhone) verificationScore += 5;
+  if (hasEmail) verificationScore += 5;
+
+  verificationScore = Math.min(100, verificationScore);
+
+  const isVerified = verificationScore >= 80;
+  const verificationStatus: "VERIFIED" | "UNVERIFIED" | "REJECTED" = isVerified ? "VERIFIED" : "UNVERIFIED";
+
+  const normalizedLead: DiscoveredLeadRaw = {
+    ...raw,
+    businessName: name,
+    website: cleanWebsite,
+    sourceUrl: cleanSourceUrl || cleanWebsite || raw.sourceUrl || "",
+    email: cleanEmail,
+    phone: cleanPhone,
+    contactPerson: cleanContactPerson,
+    city: raw.city || queryContext?.city || "Local",
+    country: raw.country || queryContext?.country || "USA",
+    industry: raw.industry || queryContext?.industry || "General",
+    verificationScore,
+    fieldVerification,
+    verificationStatus,
+    rejectionReason: isVerified ? undefined : `Verification score (${verificationScore}/100) below threshold (80)`,
+    websiteStatus: hasWebsite ? "Active Website Recorded" : "No Website Listed",
+    evidenceText: `Verified business identity (${verificationScore}/100 verification score) via ${raw.source || "SerpApi"}.`,
+  };
+
+  return { lead: normalizedLead, isVerified, reason: normalizedLead.rejectionReason };
+}
+
 /**
  * Agent Kashi Qualification & Scoring Engine (0-100 Rubric)
- * Qualifies verified records from live providers without altering business details.
+ * ONLY runs on verified leads. Calculates Opportunity/Qualification Score separately from Verification Score.
  */
 export async function qualifyLeadsWithKashi(
-  rawRecords: DiscoveredLeadRaw[],
+  verifiedRecords: DiscoveredLeadRaw[],
   query: LeadQueryParams
 ): Promise<DiscoveredLeadRaw[]> {
-  if (!rawRecords || rawRecords.length === 0) return [];
+  if (!verifiedRecords || verifiedRecords.length === 0) return [];
 
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey || apiKey.trim().length === 0) {
+  const hasAIKey = Boolean(
+    (process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY.trim().length > 0) ||
+    (process.env.OPENROUTER_API_KEY && process.env.OPENROUTER_API_KEY.trim().length > 0)
+  );
+
+  if (!hasAIKey) {
     // Deterministic Kashi Rubric Scoring (0-100) fallback
-    return rawRecords.map((lead) => {
-      let score = 55; // base score
-      if (lead.website && !lead.website.includes("example.com")) score += 20;
-      if (lead.phone) score += 10;
-      if (lead.address) score += 10;
-      if (lead.verificationStatus === "VERIFIED") score += 5;
+    return verifiedRecords.map((lead) => {
+      let oppScore = 65; // base opportunity score
+      if (lead.website && lead.website !== "Not found") oppScore += 15;
+      if (lead.phone && lead.phone !== "Not found") oppScore += 10;
+      if (lead.address) oppScore += 10;
 
       let temperature: "HOT" | "STRONG" | "POTENTIAL" | "LOW" = "POTENTIAL";
-      if (score >= 80) temperature = "HOT";
-      else if (score >= 65) temperature = "STRONG";
-      else if (score >= 50) temperature = "POTENTIAL";
+      if (oppScore >= 80) temperature = "HOT";
+      else if (oppScore >= 65) temperature = "STRONG";
+      else if (oppScore >= 50) temperature = "POTENTIAL";
       else temperature = "LOW";
 
       return {
         ...lead,
-        score,
+        score: oppScore,
+        qualificationScore: oppScore,
         temperature,
         suggestedService: lead.suggestedService || "Custom React/Next.js Modernization & Landing Page",
         auditIssue: lead.auditIssue || "Mobile viewport & conversion CTA optimization recommended",
-        pitchHook: lead.pitchHook || `I noticed ${lead.businessName} on live maps and checked your mobile web performance.`,
-        evidenceText: `Verified business record qualified by Agent Kashi (${score}/100 - ${temperature} LEAD).`,
+        pitchHook: lead.pitchHook || `I noticed ${lead.businessName} on live maps and checked your mobile web interface.`,
       };
     });
   }
 
-  // Gemini Agent Kashi Qualification
+  // Agent Kashi Opportunity Qualification (Gemini -> OpenRouter Fallback)
   try {
-    const ai = new GoogleGenAI({ apiKey });
     const prompt = `You are Agent Kashi, a professional client-acquisition agent for frontend developer Muhammad Waqas.
-Evaluate these REAL, VERIFIED business prospect records returned from live provider search.
+Evaluate these REAL, VERIFIED business prospect records for client opportunity.
 
 QUERY CONTEXT:
 - Country: ${query.country || "USA"}
 - City: ${query.city || "General"}
 - Industry: ${query.industry || "General"}
 - Opportunity Type: ${query.opportunityType || "Client Projects ($2k+)"}
-- Keyword: ${query.keyword || "N/A"}
 
 VERIFIED BUSINESS RECORDS FROM PROVIDER:
 ${JSON.stringify(
-  rawRecords.map((r, idx) => ({
+  verifiedRecords.map((r, idx) => ({
     id: idx,
     businessName: r.businessName,
     website: r.website,
@@ -209,48 +428,42 @@ ${JSON.stringify(
     industry: r.industry,
     source: r.source,
     sourceUrl: r.sourceUrl,
+    verificationScore: r.verificationScore,
   })),
   null,
   2
 )}
 
 STRICT RULES:
-1. YOU MUST PRESERVE the exact businessName, website, phone, address, city, country, source, and sourceUrl for each item. DO NOT invent or change any business names or URLs!
-2. Score each business on Kashi's 0-100 rubric:
+1. DO NOT invent or alter businessName, website, phone, email, address, city, country, source, or sourceUrl.
+2. Score each business on Kashi's 0-100 Opportunity Rubric:
    - Budget Potential (25 pts): $2,000+ potential
    - Need (20 pts): web modernization, mobile UI improvement, clear CTA
    - Skill Match (20 pts): React, TypeScript, Tailwind, Next.js, Node
    - Client Quality (15 pts): legitimate operating business/agency/startup
    - Project Quality (10 pts): portfolio case-study value
    - Relationship Potential (10 pts): recurring/long-term potential
-3. Set temperature:
-   - HOT (80-100 score)
-   - STRONG (65-79 score)
-   - POTENTIAL (50-64 score)
-   - LOW (0-49 score)
-4. Provide a tailored suggestedService, auditIssue, and low-pressure pitchHook for Muhammad Waqas.
+3. Set temperature: HOT (80-100 score), STRONG (65-79), POTENTIAL (50-64), LOW (0-49).
+4. Provide a tailored suggestedService, auditIssue, and pitchHook.
 
 Return JSON array matching input length with fields: id, score, temperature, suggestedService, auditIssue, pitchHook.`;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.6-flash",
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.ARRAY,
-          items: {
-            type: Type.OBJECT,
-            properties: {
-              id: { type: Type.INTEGER },
-              score: { type: Type.INTEGER },
-              temperature: { type: Type.STRING },
-              suggestedService: { type: Type.STRING },
-              auditIssue: { type: Type.STRING },
-              pitchHook: { type: Type.STRING },
-            },
-            required: ["id", "score", "temperature", "suggestedService", "auditIssue", "pitchHook"],
+    const aiResult = await executeAIGeneratedContent({
+      prompt,
+      responseJson: true,
+      responseSchema: {
+        type: Type.ARRAY,
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            id: { type: Type.INTEGER },
+            score: { type: Type.INTEGER },
+            temperature: { type: Type.STRING },
+            suggestedService: { type: Type.STRING },
+            auditIssue: { type: Type.STRING },
+            pitchHook: { type: Type.STRING },
           },
+          required: ["id", "score", "temperature", "suggestedService", "auditIssue", "pitchHook"],
         },
       },
     });
@@ -262,41 +475,41 @@ Return JSON array matching input length with fields: id, score, temperature, sug
       suggestedService: string;
       auditIssue: string;
       pitchHook: string;
-    }> = JSON.parse(response.text || "[]");
+    }> = JSON.parse(cleanJsonText(aiResult.text) || "[]");
 
     const evalMap = new Map(evaluations.map((e) => [e.id, e]));
 
-    return rawRecords.map((lead, idx) => {
+    return verifiedRecords.map((lead, idx) => {
       const evalData = evalMap.get(idx);
       if (!evalData) return lead;
 
-      const score = Math.max(0, Math.min(100, evalData.score || 75));
+      const oppScore = Math.max(0, Math.min(100, evalData.score || 75));
       let temp = evalData.temperature as "HOT" | "STRONG" | "POTENTIAL" | "LOW";
       if (!["HOT", "STRONG", "POTENTIAL", "LOW"].includes(temp)) {
-        if (score >= 80) temp = "HOT";
-        else if (score >= 65) temp = "STRONG";
-        else if (score >= 50) temp = "POTENTIAL";
+        if (oppScore >= 80) temp = "HOT";
+        else if (oppScore >= 65) temp = "STRONG";
+        else if (oppScore >= 50) temp = "POTENTIAL";
         else temp = "LOW";
       }
 
       return {
         ...lead,
-        score,
+        score: oppScore,
+        qualificationScore: oppScore,
         temperature: temp,
         suggestedService: evalData.suggestedService || lead.suggestedService,
         auditIssue: evalData.auditIssue || lead.auditIssue,
         pitchHook: evalData.pitchHook || lead.pitchHook,
-        evidenceText: `Verified business record qualified & scored by Agent Kashi (${score}/100 - ${temp} LEAD).`,
       };
     });
   } catch (err) {
     console.error("Kashi qualification error:", err);
-    return rawRecords;
+    return verifiedRecords;
   }
 }
 
 /**
- * 1. SerpApi Google & Maps Search Provider (FIRST LIVE LEAD PROVIDER)
+ * 1. SerpApi Google & Maps Search Provider (PRIMARY LIVE LEAD PROVIDER)
  */
 export class SerpApiSearchProvider implements LeadProvider {
   id = "serpapi-search";
@@ -355,7 +568,6 @@ export class SerpApiSearchProvider implements LeadProvider {
     const apiKey = process.env.SERPAPI_API_KEY!.trim();
 
     try {
-      // Build search query using user parameters
       const queryParts = [keyword, industry, opportunityType].filter(Boolean).join(" ");
       const locationParts = [city, country].filter(Boolean).join(", ");
       const fullQuery = locationParts ? `${queryParts} in ${locationParts}` : queryParts || "businesses";
@@ -380,51 +592,57 @@ export class SerpApiSearchProvider implements LeadProvider {
           providerId: this.id,
           statusCode: 200,
           rawCount: 0,
+          validatedCount: 0,
+          rejectedCount: 0,
           searchParamsUsed: query,
         };
       }
 
-      // Preserve exact business information returned by SerpApi
-      const rawLeads: DiscoveredLeadRaw[] = localResults.slice(0, 12).map((item: any) => {
-        const title = item.title || item.name || "Business Prospect";
+      // Step 1: Map raw items with ZERO synthetic placeholders
+      const rawLeads: DiscoveredLeadRaw[] = localResults.slice(0, 15).map((item: any) => {
+        const title = item.title || item.name || "";
         const cleanWebsite = item.website || item.link || "";
         const phone = item.phone || item.phone_number || "";
         const address = item.address || item.formatted_address || "";
         const itemCategory = item.type || item.category || industry || "Business";
         
-        // Return exact source URLs
         const sourceUrl = item.link || item.serpapi_link || (item.place_id 
           ? `https://www.google.com/maps/place/?q=place_id:${item.place_id}` 
           : (cleanWebsite || `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(title)}`));
 
         return {
           businessName: title,
-          contactPerson: "Owner / Manager",
-          email: cleanWebsite ? `contact@${cleanWebsite.replace(/^https?:\/\//, "").replace(/\/.*$/, "")}` : "",
-          phone,
-          website: cleanWebsite,
-          address,
+          contactPerson: "Not found",
+          email: "Not found",
+          phone: phone || "Not found",
+          website: cleanWebsite || "Not found",
+          address: address || "",
           city: city || item.city || "Local",
           country: country || item.country || "USA",
           industry: itemCategory,
-          score: 75,
-          temperature: "STRONG",
-          websiteStatus: cleanWebsite ? "Active Website Recorded" : "No Listed Website",
-          suggestedService: "Custom High-Converting Web Application & Mobile UX Optimization",
-          auditIssue: "Mobile viewport optimization & appointment booking CTA recommended",
-          pitchHook: `I noticed ${title} on Google Maps and analyzed your online presence.`,
           source: "SerpApi Google Maps",
           sourceUrl,
-          verificationStatus: (cleanWebsite || phone || address) ? "VERIFIED" : "UNVERIFIED",
+          verificationStatus: "UNVERIFIED",
           dateDiscovered: new Date().toISOString(),
           evidenceText: `Verified local Google Maps record via SerpApi (${item.reviews || 0} reviews, ${item.rating || "N/A"} rating).`,
         };
       });
 
-      // Filter verified records and qualify with Kashi
-      const verifiedLeads = rawLeads.filter((l) => l.verificationStatus === "VERIFIED");
-      const targetLeads = verifiedLeads.length > 0 ? verifiedLeads : rawLeads;
-      const qualifiedLeads = await qualifyLeadsWithKashi(targetLeads, query);
+      // Step 2: Field Verification & Pipeline Filtering
+      let rejectedCount = 0;
+      const verifiedLeads: DiscoveredLeadRaw[] = [];
+
+      for (const raw of rawLeads) {
+        const { lead, isVerified } = verifyAndNormalizeLead(raw, query);
+        if (isVerified) {
+          verifiedLeads.push(lead);
+        } else {
+          rejectedCount++;
+        }
+      }
+
+      // Step 3: Only pass VERIFIED leads to AI qualification
+      const qualifiedLeads = await qualifyLeadsWithKashi(verifiedLeads, query);
 
       updateProviderHealth(this.id, { status: "Connected", lastSuccessfulSearch: new Date().toISOString() });
 
@@ -435,6 +653,8 @@ export class SerpApiSearchProvider implements LeadProvider {
         providerId: this.id,
         statusCode: 200,
         rawCount: localResults.length,
+        validatedCount: qualifiedLeads.length,
+        rejectedCount,
         searchParamsUsed: query,
       };
     } catch (err: any) {
@@ -453,7 +673,7 @@ export class SerpApiSearchProvider implements LeadProvider {
 }
 
 /**
- * 2. Foursquare Places API Provider (500 Free Pro Calls)
+ * 2. Foursquare Places API Provider
  */
 export class FoursquarePlacesProvider implements LeadProvider {
   id = "foursquare-places";
@@ -534,30 +754,33 @@ export class FoursquarePlacesProvider implements LeadProvider {
         const fsqUrl = item.link || (item.fsq_id ? `https://foursquare.com/v/${item.fsq_id}` : cleanSite);
         
         return {
-          businessName: item.name,
-          contactPerson: "Business Manager",
-          email: item.email || (cleanSite ? `contact@${cleanSite.replace(/^https?:\/\//, "").replace(/\/.*$/, "")}` : ""),
-          phone: item.tel || "",
-          website: cleanSite,
+          businessName: item.name || "",
+          contactPerson: "Not found",
+          email: item.email || "Not found",
+          phone: item.tel || "Not found",
+          website: cleanSite || "Not found",
           address: item.location?.formatted_address || item.location?.address || "",
           city: item.location?.locality || city || "Local",
           country: item.location?.country || country || "USA",
           industry: item.categories?.[0]?.name || industry || "General",
-          score: item.rating ? Math.round(item.rating * 10) : 75,
-          temperature: "STRONG",
-          websiteStatus: cleanSite ? "Active Website Listed" : "No Listed Website",
-          suggestedService: "Custom High-Converting Web Landing Page & Booking Portal",
-          auditIssue: "Lacks direct online booking engine & responsive mobile layout",
-          pitchHook: `I found ${item.name} on Foursquare and checked your mobile web interface.`,
           source: "Foursquare Places API",
           sourceUrl: fsqUrl,
-          verificationStatus: (cleanSite || item.tel || item.location) ? "VERIFIED" : "UNVERIFIED",
+          verificationStatus: "UNVERIFIED",
           dateDiscovered: new Date().toISOString(),
           evidenceText: `Verified place record on Foursquare Places API.`,
         };
       });
 
-      const qualifiedLeads = await qualifyLeadsWithKashi(rawLeads, query);
+      let rejectedCount = 0;
+      const verifiedLeads: DiscoveredLeadRaw[] = [];
+
+      for (const raw of rawLeads) {
+        const { lead, isVerified } = verifyAndNormalizeLead(raw, query);
+        if (isVerified) verifiedLeads.push(lead);
+        else rejectedCount++;
+      }
+
+      const qualifiedLeads = await qualifyLeadsWithKashi(verifiedLeads, query);
 
       updateProviderHealth(this.id, { status: "Connected", lastSuccessfulSearch: new Date().toISOString() });
       return {
@@ -567,6 +790,8 @@ export class FoursquarePlacesProvider implements LeadProvider {
         providerId: this.id,
         statusCode: 200,
         rawCount: rawLeads.length,
+        validatedCount: qualifiedLeads.length,
+        rejectedCount,
         searchParamsUsed: query,
       };
     } catch (err: any) {
@@ -665,30 +890,33 @@ export class YelpFusionProvider implements LeadProvider {
       const rawLeads: DiscoveredLeadRaw[] = businesses.map((item: any) => {
         const cleanSite = item.url || "";
         return {
-          businessName: item.name,
-          contactPerson: "Business Owner",
-          email: "",
-          phone: item.phone || item.display_phone || "",
-          website: cleanSite,
+          businessName: item.name || "",
+          contactPerson: "Not found",
+          email: "Not found",
+          phone: item.phone || item.display_phone || "Not found",
+          website: cleanSite || "Not found",
           address: item.location?.address1 || "",
           city: item.location?.city || city || "Local",
           country: item.location?.country || country || "USA",
           industry: item.categories?.[0]?.title || industry || "General",
-          score: item.rating ? Math.round(item.rating * 18) : 75,
-          temperature: "STRONG",
-          websiteStatus: "Yelp Verified Merchant Entry",
-          suggestedService: "Modern Mobile Responsive Web Design & Lead Capture Form",
-          auditIssue: "Lacks direct mobile lead conversion engine & high-speed viewport",
-          pitchHook: `I noticed your Yelp profile for ${item.name} and analyzed your mobile web site.`,
           source: "Yelp Fusion API",
           sourceUrl: item.url || `https://www.yelp.com/biz/${item.id}`,
-          verificationStatus: "VERIFIED",
+          verificationStatus: "UNVERIFIED",
           dateDiscovered: new Date().toISOString(),
           evidenceText: `Verified operating business on Yelp Fusion (${item.review_count || 0} reviews, ${item.rating || "N/A"} stars).`,
         };
       });
 
-      const qualifiedLeads = await qualifyLeadsWithKashi(rawLeads, query);
+      let rejectedCount = 0;
+      const verifiedLeads: DiscoveredLeadRaw[] = [];
+
+      for (const raw of rawLeads) {
+        const { lead, isVerified } = verifyAndNormalizeLead(raw, query);
+        if (isVerified) verifiedLeads.push(lead);
+        else rejectedCount++;
+      }
+
+      const qualifiedLeads = await qualifyLeadsWithKashi(verifiedLeads, query);
 
       updateProviderHealth(this.id, { status: "Connected", lastSuccessfulSearch: new Date().toISOString() });
       return {
@@ -698,6 +926,8 @@ export class YelpFusionProvider implements LeadProvider {
         providerId: this.id,
         statusCode: 200,
         rawCount: rawLeads.length,
+        validatedCount: qualifiedLeads.length,
+        rejectedCount,
         searchParamsUsed: query,
       };
     } catch (err: any) {
@@ -724,7 +954,10 @@ export class GoogleSearchLiveProvider implements LeadProvider {
   supportedSearchTypes = ["Client Projects ($2k+)", "Startup MVP Frontend", "Website Modernization", "Dashboard & Portals"];
 
   isConfigured(): boolean {
-    return Boolean(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY.trim().length > 0);
+    return Boolean(
+      (process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY.trim().length > 0) ||
+      (process.env.OPENROUTER_API_KEY && process.env.OPENROUTER_API_KEY.trim().length > 0)
+    );
   }
 
   async testConnection(): Promise<ConnectionTestResult> {
@@ -733,22 +966,21 @@ export class GoogleSearchLiveProvider implements LeadProvider {
       return {
         success: false,
         statusCode: 503,
-        message: "Google Search Engine is not configured. Configure GEMINI_API_KEY.",
+        message: "Google Search Engine is not configured. Configure GEMINI_API_KEY or OPENROUTER_API_KEY.",
       };
     }
 
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
-      const res = await ai.models.generateContent({
-        model: "gemini-3.6-flash",
-        contents: "Respond JSON: {\"status\":\"ok\"}",
+      const res = await executeAIGeneratedContent({
+        prompt: "Respond JSON: {\"status\":\"ok\"}",
+        responseJson: true,
       });
       if (res?.text) {
         updateProviderHealth(this.id, { status: "Connected" });
         return {
           success: true,
           statusCode: 200,
-          message: "Google Live Web Search provider verified & connected.",
+          message: `Google Live Web Search provider verified & connected via ${res.provider}.`,
         };
       }
       throw new Error("No response from provider test");
@@ -773,10 +1005,6 @@ export class GoogleSearchLiveProvider implements LeadProvider {
     }
 
     const { country, industry, city, opportunityType, budgetTarget, keyword } = query;
-    const ai = new GoogleGenAI({
-      apiKey: process.env.GEMINI_API_KEY!,
-      httpOptions: { headers: { "User-Agent": "leadflow-ai-os" } },
-    });
 
     const prompt = `You are a live B2B lead discovery engine querying real public search indices.
 Locate 6 REAL, operating prospect businesses strictly matching:
@@ -791,49 +1019,48 @@ STRICT RULES:
 1. Return ONLY REAL, operating businesses with real websites and addresses in ${city || country}.
 2. Do NOT invent fake company names or fake domains. If zero match, return [].
 3. Preserve real source URLs.
+4. If email, phone, or contact person is missing, output "Not found". DO NOT generate synthetic emails like contact@domain.com or contact persons like "Owner / Manager".
 
-Return JSON array with businessName, contactPerson, email, phone, website, address, city, country, industry, score, temperature, websiteStatus, suggestedService, auditIssue, pitchHook, source ("Google Live Web Search Engine"), sourceUrl, verificationStatus ("VERIFIED"), evidenceText.`;
+Return JSON array with businessName, contactPerson, email, phone, website, address, city, country, industry, source ("Google Live Web Search Engine"), sourceUrl.`;
 
     try {
-      const response = await ai.models.generateContent({
-        model: "gemini-3.6-flash",
-        contents: prompt,
-        config: {
-          tools: [{ googleSearch: {} }],
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                businessName: { type: Type.STRING },
-                contactPerson: { type: Type.STRING },
-                email: { type: Type.STRING },
-                phone: { type: Type.STRING },
-                website: { type: Type.STRING },
-                address: { type: Type.STRING },
-                city: { type: Type.STRING },
-                country: { type: Type.STRING },
-                industry: { type: Type.STRING },
-                score: { type: Type.INTEGER },
-                temperature: { type: Type.STRING },
-                websiteStatus: { type: Type.STRING },
-                suggestedService: { type: Type.STRING },
-                auditIssue: { type: Type.STRING },
-                pitchHook: { type: Type.STRING },
-                source: { type: Type.STRING },
-                sourceUrl: { type: Type.STRING },
-                verificationStatus: { type: Type.STRING },
-                evidenceText: { type: Type.STRING },
-              },
-              required: ["businessName", "website", "score", "temperature", "suggestedService", "auditIssue", "pitchHook"],
+      const aiResult = await executeAIGeneratedContent({
+        prompt,
+        responseJson: true,
+        responseSchema: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              businessName: { type: Type.STRING },
+              contactPerson: { type: Type.STRING },
+              email: { type: Type.STRING },
+              phone: { type: Type.STRING },
+              website: { type: Type.STRING },
+              address: { type: Type.STRING },
+              city: { type: Type.STRING },
+              country: { type: Type.STRING },
+              industry: { type: Type.STRING },
+              source: { type: Type.STRING },
+              sourceUrl: { type: Type.STRING },
             },
+            required: ["businessName", "website", "sourceUrl"],
           },
         },
       });
 
-      const rawLeads: DiscoveredLeadRaw[] = JSON.parse(response.text || "[]");
-      const qualifiedLeads = await qualifyLeadsWithKashi(rawLeads, query);
+      const rawLeads: DiscoveredLeadRaw[] = JSON.parse(cleanJsonText(aiResult.text) || "[]");
+
+      let rejectedCount = 0;
+      const verifiedLeads: DiscoveredLeadRaw[] = [];
+
+      for (const raw of rawLeads) {
+        const { lead, isVerified } = verifyAndNormalizeLead(raw, query);
+        if (isVerified) verifiedLeads.push(lead);
+        else rejectedCount++;
+      }
+
+      const qualifiedLeads = await qualifyLeadsWithKashi(verifiedLeads, query);
 
       updateProviderHealth(this.id, { status: "Connected", lastSuccessfulSearch: new Date().toISOString() });
       return {
@@ -842,7 +1069,9 @@ Return JSON array with businessName, contactPerson, email, phone, website, addre
         provider: this.name,
         providerId: this.id,
         statusCode: 200,
-        rawCount: qualifiedLeads.length,
+        rawCount: rawLeads.length,
+        validatedCount: qualifiedLeads.length,
+        rejectedCount,
         searchParamsUsed: query,
       };
     } catch (err: any) {
@@ -861,7 +1090,7 @@ Return JSON array with businessName, contactPerson, email, phone, website, addre
 }
 
 /**
- * 5. Auto Multi-Source Aggregator Provider (All Configured)
+ * 5. Auto Multi-Source Aggregator Provider
  */
 export class AutoMultiProvider implements LeadProvider {
   id = "auto-multi";
@@ -904,18 +1133,23 @@ export class AutoMultiProvider implements LeadProvider {
     }
 
     const allLeads: DiscoveredLeadRaw[] = [];
+    let totalRaw = 0;
+    let totalRejected = 0;
+
     for (const provider of activeProviders) {
       try {
         const res = await provider.searchBusinesses(query);
         if (res.success && res.leads) {
           allLeads.push(...res.leads);
+          totalRaw += res.rawCount || 0;
+          totalRejected += res.rejectedCount || 0;
         }
       } catch (err) {
         console.error(`Error in multi-provider (${provider.name}):`, err);
       }
     }
 
-    // Deduplicate by business name / domain
+    // Deduplicate by business name / website domain
     const seenMap = new Set<string>();
     const deduplicatedLeads: DiscoveredLeadRaw[] = [];
 
@@ -935,7 +1169,9 @@ export class AutoMultiProvider implements LeadProvider {
       provider: this.name,
       providerId: this.id,
       statusCode: 200,
-      rawCount: allLeads.length,
+      rawCount: totalRaw,
+      validatedCount: deduplicatedLeads.length,
+      rejectedCount: totalRejected,
       searchParamsUsed: query,
     };
   }

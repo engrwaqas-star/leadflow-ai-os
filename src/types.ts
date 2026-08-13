@@ -96,6 +96,18 @@ export interface Lead {
     afterFixes: string[];
     shareableProofLink: string;
   };
+  verificationScore?: number;
+  verificationStatus?: 'VERIFIED' | 'UNVERIFIED' | 'REJECTED';
+  fieldVerification?: {
+    companyNameVerified: boolean;
+    locationVerified: boolean;
+    industryVerified: boolean;
+    websiteVerified: boolean;
+    phoneVerified: boolean;
+    emailVerified: boolean;
+    contactPersonVerified: boolean;
+  };
+  rejectionReason?: string;
   // Enriched fields
   enrichment?: CompanyEnrichment;
   credibility?: CredibilityData;

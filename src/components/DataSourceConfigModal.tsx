@@ -32,6 +32,7 @@ export const DataSourceConfigModal: React.FC<DataSourceConfigModalProps> = ({
   onSelectProvider,
 }) => {
   const [apiKey, setApiKey] = useState('');
+  const [openrouterKey, setOpenrouterKey] = useState('');
   const [foursquareKey, setFoursquareKey] = useState('');
   const [serpapiKey, setSerpapiKey] = useState('');
   const [yelpKey, setYelpKey] = useState('');
@@ -97,6 +98,7 @@ export const DataSourceConfigModal: React.FC<DataSourceConfigModalProps> = ({
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
         apiKey, 
+        openrouterKey,
         foursquareKey, 
         serpapiKey, 
         yelpKey, 
@@ -261,7 +263,24 @@ export const DataSourceConfigModal: React.FC<DataSourceConfigModalProps> = ({
                     type="password"
                     value={apiKey}
                     onChange={(e) => setApiKey(e.target.value)}
-                    placeholder="Enter key or use server default..."
+                    placeholder="Primary Gemini API key..."
+                    className="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 pr-8 text-xs text-slate-800 font-mono focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                  />
+                  <Key className="w-3.5 h-3.5 text-slate-400 absolute right-2.5 top-3" />
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1 flex items-center gap-1">
+                  OpenRouter API Key (Fallback)
+                  <span className="text-[10px] text-indigo-600 bg-indigo-50 px-1.5 py-0.2 rounded font-extrabold border border-indigo-200">Auto-Switch</span>
+                </label>
+                <div className="relative">
+                  <input
+                    type="password"
+                    value={openrouterKey}
+                    onChange={(e) => setOpenrouterKey(e.target.value)}
+                    placeholder="OpenRouter key for Gemini quota fallback..."
                     className="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 pr-8 text-xs text-slate-800 font-mono focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                   />
                   <Key className="w-3.5 h-3.5 text-slate-400 absolute right-2.5 top-3" />
