@@ -13,9 +13,13 @@ import {
   Globe, 
   MoreVertical,
   ArrowRight,
-  Filter
+  Filter,
+  ShieldCheck,
+  Target,
+  Handshake
 } from 'lucide-react';
-import { Lead, ContactStatus } from '../types';
+import { Lead, ContactStatus, LeadStage, LeadStrategy } from '../types';
+import { determineLeadStage } from '../utils/leadPipeline';
 
 interface PipelineViewProps {
   leads: Lead[];
@@ -208,6 +212,7 @@ export const PipelineView: React.FC<PipelineViewProps> = ({
                 ) : (
                   colLeads.map((lead) => {
                     const dealVal = getDealValue(lead.score);
+                    const currentStage: LeadStage = lead.stage || determineLeadStage(lead);
                     return (
                       <div
                         key={lead.id}
@@ -223,6 +228,31 @@ export const PipelineView: React.FC<PipelineViewProps> = ({
                           </span>
                         </div>
 
+                        {/* Strategy and Stage badges */}
+                        <div className="flex flex-wrap items-center gap-1 text-[9px] font-black uppercase">
+                          <span className="px-1.5 py-0.2 bg-slate-100 text-slate-700 rounded border border-slate-200">
+                            {lead.leadStrategy === 'AGENCY_PARTNERSHIPS' ? 'Agency Partner' : 'Direct Client'}
+                          </span>
+                          <span className="px-1.5 py-0.2 bg-indigo-50 text-indigo-800 rounded border border-indigo-200">
+                            {currentStage.replace(/_/g, ' ')}
+                          </span>
+                          {lead.auditStatus === 'Audited' ? (
+                            <span className="px-1.5 py-0.2 bg-emerald-50 text-emerald-800 rounded border border-emerald-200">
+                              ✓ Audited
+                            </span>
+                          ) : (
+                            <span className="px-1.5 py-0.2 bg-amber-50 text-amber-800 rounded border border-amber-200">
+                              Audit Pending
+                            </span>
+                          )}
+                        </div>
+
+                        {lead.skillGaps && lead.skillGaps.length > 0 && (
+                          <div className="text-[9px] text-rose-700 font-extrabold bg-rose-50 px-1.5 py-0.5 rounded border border-rose-200">
+                            SKILL GAP: {lead.skillGaps.join(', ')}
+                          </div>
+                        )}
+
                         <p className="text-[11px] font-semibold text-slate-600 flex items-center gap-1">
                           <Building2 className="w-3.5 h-3.5 text-slate-500 shrink-0" />
                           <span className="truncate">{lead.contactPerson} • {lead.city || lead.country}</span>
@@ -235,7 +265,7 @@ export const PipelineView: React.FC<PipelineViewProps> = ({
                         <div className="flex items-center justify-between pt-1.5 border-t border-slate-200 text-[11px]">
                           <span className="font-black text-emerald-800 flex items-center gap-0.5 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
                             <DollarSign className="w-3 h-3 text-emerald-600" />
-                            {dealVal.toLocaleString()}
+                            {lead.estimatedBudget ? lead.estimatedBudget : `$${dealVal.toLocaleString()}`}
                           </span>
 
                           {/* Quick Stage Move Dropdown */}

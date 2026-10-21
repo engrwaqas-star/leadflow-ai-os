@@ -12,6 +12,7 @@ export interface LeadQueryParams {
   budgetTarget?: string;
   keyword?: string;
   providerId?: string;
+  leadStrategy?: 'DIRECT_CLIENTS' | 'AGENCY_PARTNERSHIPS';
 }
 
 export interface FieldVerification {
@@ -391,10 +392,12 @@ export async function qualifyLeadsWithKashi(
   if (!hasAIKey) {
     // Deterministic Kashi Rubric Scoring (0-100) fallback
     return verifiedRecords.map((lead) => {
-      let oppScore = 65; // base opportunity score
-      if (lead.website && lead.website !== "Not found") oppScore += 15;
-      if (lead.phone && lead.phone !== "Not found") oppScore += 10;
-      if (lead.address) oppScore += 10;
+      const isAgency = query.leadStrategy === 'AGENCY_PARTNERSHIPS' || (lead.industry || '').toLowerCase().includes('agency');
+      let oppScore = 60; // base opportunity score for verified business
+      if (lead.website && lead.website !== "Not found") oppScore += 10;
+      if (lead.phone && lead.phone !== "Not found") oppScore += 5;
+      if (lead.address) oppScore += 5;
+      if (isAgency) oppScore += 5; // Subcontracting partnership potential
 
       let temperature: "HOT" | "STRONG" | "POTENTIAL" | "LOW" = "POTENTIAL";
       if (oppScore >= 80) temperature = "HOT";
@@ -402,14 +405,20 @@ export async function qualifyLeadsWithKashi(
       else if (oppScore >= 50) temperature = "POTENTIAL";
       else temperature = "LOW";
 
+      const suggestedService = isAgency 
+        ? "Frontend Subcontractor & Overflow React/Tailwind Implementation" 
+        : (lead.suggestedService || "Responsive Business Frontend & Modernization");
+
       return {
         ...lead,
         score: oppScore,
         qualificationScore: oppScore,
         temperature,
-        suggestedService: lead.suggestedService || "Custom React/Next.js Modernization & Landing Page",
-        auditIssue: lead.auditIssue || "Mobile viewport & conversion CTA optimization recommended",
-        pitchHook: lead.pitchHook || `I noticed ${lead.businessName} on live maps and checked your mobile web interface.`,
+        suggestedService,
+        auditIssue: "Technical website audit pending live inspection",
+        pitchHook: isAgency 
+          ? `I noticed ${lead.businessName}'s agency work and wanted to introduce myself as a reliable frontend subcontractor for React/Tailwind overflow.`
+          : `I came across ${lead.businessName} and wanted to share a few frontend observations for your online presence.`,
       };
     });
   }
@@ -448,13 +457,16 @@ STRICT RULES:
 1. DO NOT invent or alter businessName, website, phone, email, address, city, country, source, or sourceUrl.
 2. Score each business on Kashi's 0-100 Opportunity Rubric:
    - Budget Potential (25 pts): $2,000+ potential
-   - Need (20 pts): web modernization, mobile UI improvement, clear CTA
-   - Skill Match (20 pts): React, TypeScript, Tailwind, Next.js, Node
+   - Need (20 pts): real developer need or overflow capacity requirement
+   - Skill Match (20 pts): React, TypeScript, Tailwind, HTML, CSS, Node
    - Client Quality (15 pts): legitimate operating business/agency/startup
    - Project Quality (10 pts): portfolio case-study value
    - Relationship Potential (10 pts): recurring/long-term potential
 3. Set temperature: HOT (80-100 score), STRONG (65-79), POTENTIAL (50-64), LOW (0-49).
-4. Provide a tailored suggestedService, auditIssue, and pitchHook.
+4. If Strategy is AGENCY_PARTNERSHIPS or business is an agency: Do not treat existing web services as a defect. Suggest "Frontend Subcontractor & Overflow Capacity" and focus on white-label implementation.
+5. If Strategy is DIRECT_CLIENTS: Recommend responsive modernization, landing pages, or portals. Do not force React unless justified.
+6. Since this is initial discovery, note that live DOM audit is pending. Set auditIssue: "Technical audit pending live inspection".
+7. Developer profile: Muhammad Waqas (6 months frontend development, comfortable with React, Tailwind, HTML/CSS, TypeScript, Node). Never claim senior level.
 
 Return JSON array matching input length with fields: id, score, temperature, suggestedService, auditIssue, pitchHook.`;
 

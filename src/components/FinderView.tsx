@@ -28,9 +28,12 @@ import {
   Check,
   Activity,
   Sliders,
-  ShieldCheck
+  ShieldCheck,
+  Target,
+  Handshake,
+  Compass
 } from 'lucide-react';
-import { Lead, SuppressedDomainRecord } from '../types';
+import { Lead, LeadStrategy, SuppressedDomainRecord } from '../types';
 import { loggedFetch } from '../utils/apiLogger';
 import { 
   checkIsSuppressed, 
@@ -58,6 +61,9 @@ export const FinderView: React.FC<FinderViewProps> = ({
   onSuppressLead,
 }) => {
   const [activeSubTab, setActiveSubTab] = useState<'ai_discovery' | 'linkedin_prospector' | 'job_opportunities'>('ai_discovery');
+
+  // Strategy A (Direct Clients) vs Strategy B (Agency Partnerships)
+  const [leadStrategy, setLeadStrategy] = useState<LeadStrategy>('DIRECT_CLIENTS');
 
   // Search Parameters - Free-form & non-restrictive
   const [country, setCountry] = useState('USA');
@@ -229,8 +235,15 @@ export const FinderView: React.FC<FinderViewProps> = ({
   };
 
   const handleImport = (item: any, index: number) => {
-    const scoreData = calculateExplainableScore(item);
-    const valueData = estimateProjectValue(item);
+    const scoreData = calculateExplainableScore({
+      ...item,
+      leadStrategy,
+      suggestedService: item.suggestedService,
+    });
+    const valueData = estimateProjectValue({
+      ...item,
+      suggestedService: item.suggestedService,
+    });
 
     const cleanContactPerson = item.contactPerson && item.contactPerson !== 'Owner / Manager' && item.contactPerson !== 'Business Owner' ? item.contactPerson : 'Not found';
     const cleanEmail = item.email && !item.email.includes('domain.com') ? item.email : 'Not found';
@@ -244,21 +257,37 @@ export const FinderView: React.FC<FinderViewProps> = ({
       phone: cleanPhone,
       website: cleanWebsite,
       industry: item.industry || industry,
+      niche: item.industry || industry,
       country: item.country || country,
       city: item.city || city || 'Local',
       score: scoreData.totalScore,
-      temperature: item.temperature || 'WARM',
+      temperature: item.temperature || (scoreData.totalScore >= 80 ? 'HOT' : scoreData.totalScore >= 65 ? 'GOOD' : 'POTENTIAL'),
       contactStatus: 'Not Contacted',
+      stage: item.verificationStatus === 'VERIFIED' ? 'IDENTITY_VERIFIED' : 'DISCOVERED',
+      leadStrategy,
       websiteStatus: item.websiteStatus || 'Discovered via Discovery Pipeline',
-      suggestedService: item.suggestedService || valueData.recommendedService,
-      auditIssue: item.auditIssue || 'Optimization required for mobile viewport and speed',
-      pitchHook: item.pitchHook || 'I noticed your mobile page speed could be improved by 3+ seconds.',
-      mobileViewport: true,
+      suggestedService: item.suggestedService || (leadStrategy === 'AGENCY_PARTNERSHIPS' ? 'Frontend Subcontractor & Overflow React Implementation' : valueData.recommendedService),
+      auditIssue: 'Technical website audit pending live inspection',
+      pitchHook: item.pitchHook || (leadStrategy === 'AGENCY_PARTNERSHIPS' 
+        ? `I noticed ${item.businessName}'s agency work and wanted to offer reliable frontend overflow capacity in React and Tailwind.`
+        : `I came across ${item.businessName} and noticed a few frontend opportunities to improve responsive performance.`),
+      mobileViewport: false,
       clearCTA: false,
-      speedRating: 'Slow',
-      auditStatus: 'Audited',
+      speedRating: 'Average',
+      auditStatus: 'Pending',
+      estimatedBudget: valueData.estimatedValueRange,
+      scoreBreakdown: {
+        budgetPotentialScore: scoreData.budgetPotentialScore,
+        needScore: scoreData.needScore,
+        skillMatchScore: scoreData.skillMatchScore,
+        clientQualityScore: scoreData.clientQualityScore,
+        projectQualityScore: scoreData.projectQualityScore,
+        relationshipPotentialScore: scoreData.relationshipPotentialScore,
+        totalLeadScore: scoreData.totalScore,
+      },
+      skillGaps: scoreData.skillGaps,
       notes: item.evidenceText ? `[Evidence]: ${item.evidenceText}` : undefined,
-      verificationScore: item.verificationScore || 90,
+      verificationScore: item.verificationScore || 85,
       verificationStatus: item.verificationStatus || 'VERIFIED',
       fieldVerification: item.fieldVerification,
     };
@@ -454,34 +483,119 @@ export const FinderView: React.FC<FinderViewProps> = ({
               </span>
             </div>
 
+            {/* 1. Lead Strategy Selection: Strategy A (Direct Clients) vs Strategy B (Agency Partnerships) */}
+            <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 space-y-2">
+              <div className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center justify-between">
+                <span className="flex items-center gap-1.5">
+                  <Target className="w-4 h-4 text-indigo-600" /> Lead Acquisition Strategy
+                </span>
+                <span className="text-[10px] text-slate-500 font-semibold">Select prior to searching</span>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLeadStrategy('DIRECT_CLIENTS');
+                    if (industry === 'Web & Marketing Agencies') setIndustry('SaaS & AI Startups');
+                    setOpportunityType('$2,000+ Client Projects');
+                  }}
+                  className={`p-3 rounded-xl border text-left transition flex items-start gap-3 ${
+                    leadStrategy === 'DIRECT_CLIENTS'
+                      ? 'bg-white border-indigo-600 ring-2 ring-indigo-500/20 shadow-xs'
+                      : 'bg-white/70 border-slate-200 hover:border-slate-300'
+                  }`}
+                >
+                  <div className={`p-2 rounded-lg shrink-0 ${leadStrategy === 'DIRECT_CLIENTS' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600'}`}>
+                    <Target className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <div className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                      Strategy A: Direct Clients
+                      {leadStrategy === 'DIRECT_CLIENTS' && (
+                        <span className="text-[9px] bg-indigo-100 text-indigo-800 font-black px-1.5 py-0.2 rounded">Active</span>
+                      )}
+                    </div>
+                    <div className="text-[11px] text-slate-500 mt-0.5">
+                      Businesses needing responsive redesigns, SaaS MVP interfaces, landing pages, or booking funnels.
+                    </div>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLeadStrategy('AGENCY_PARTNERSHIPS');
+                    setIndustry('Web & Marketing Agencies');
+                    setOpportunityType('Frontend Subcontracting / Contract');
+                    setKeyword('web design agency contractor overflow frontend');
+                  }}
+                  className={`p-3 rounded-xl border text-left transition flex items-start gap-3 ${
+                    leadStrategy === 'AGENCY_PARTNERSHIPS'
+                      ? 'bg-white border-indigo-600 ring-2 ring-indigo-500/20 shadow-xs'
+                      : 'bg-white/70 border-slate-200 hover:border-slate-300'
+                  }`}
+                >
+                  <div className={`p-2 rounded-lg shrink-0 ${leadStrategy === 'AGENCY_PARTNERSHIPS' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600'}`}>
+                    <Handshake className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <div className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                      Strategy B: Agency Partnerships
+                      {leadStrategy === 'AGENCY_PARTNERSHIPS' && (
+                        <span className="text-[9px] bg-indigo-100 text-indigo-800 font-black px-1.5 py-0.2 rounded">Active</span>
+                      )}
+                    </div>
+                    <div className="text-[11px] text-slate-500 mt-0.5">
+                      Design & marketing agencies needing white-label frontend subcontractors or overflow implementation capacity.
+                    </div>
+                  </div>
+                </button>
+              </div>
+            </div>
+
             {/* Main Search Parameters Grid */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3.5">
               {/* Target Niche / Industry (Unrestricted Free-Form) */}
               <div className="space-y-1.5">
                 <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
-                  Target Niche / Any Industry
+                  Target Niche / Industry
                 </label>
                 <input
                   type="text"
                   value={industry}
                   onChange={(e) => setIndustry(e.target.value)}
-                  placeholder="e.g. SaaS, Healthcare, Real Estate, E-Commerce, Dentists..."
+                  placeholder="e.g. SaaS, Healthcare, E-Commerce, Agencies..."
                   className="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 text-xs text-slate-900 font-medium focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                 />
-                {/* Quick Industry Pills */}
+                {/* Meaningful Niche Selection Pills */}
                 <div className="flex flex-wrap gap-1 pt-1">
-                  {['SaaS & AI', 'Real Estate', 'Healthcare', 'E-Commerce', 'Law Firms', 'Trades / HVAC', 'Fintech'].map((tag) => (
+                  {[
+                    { label: 'SaaS Startups', ind: 'SaaS & AI Startups', opp: 'Startup MVP Frontend' },
+                    { label: 'Local Services', ind: 'Local Service Businesses', opp: 'Website Redesign & Modernization' },
+                    { label: 'E-Commerce', ind: 'E-Commerce & Retail', opp: '$2,000+ Client Projects' },
+                    { label: 'Education & LMS', ind: 'Education & LMS Platforms', opp: 'Custom Web Portal & Dashboard' },
+                    { label: 'Healthcare (Public)', ind: 'Healthcare Providers', opp: 'Website Redesign & Modernization' },
+                    { label: 'Web Agencies', ind: 'Web & Marketing Agencies', opp: 'Frontend Subcontracting / Contract' },
+                  ].map((niche) => (
                     <button
-                      key={tag}
+                      key={niche.label}
                       type="button"
-                      onClick={() => setIndustry(tag)}
+                      onClick={() => {
+                        setIndustry(niche.ind);
+                        setOpportunityType(niche.opp);
+                        if (niche.ind === 'Web & Marketing Agencies') {
+                          setLeadStrategy('AGENCY_PARTNERSHIPS');
+                        } else {
+                          setLeadStrategy('DIRECT_CLIENTS');
+                        }
+                      }}
                       className={`text-[10px] px-2 py-0.5 rounded-md font-semibold transition ${
-                        industry === tag
+                        industry === niche.ind
                           ? 'bg-indigo-600 text-white'
                           : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                       }`}
                     >
-                      {tag}
+                      {niche.label}
                     </button>
                   ))}
                 </div>

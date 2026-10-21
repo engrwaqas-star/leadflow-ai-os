@@ -88,12 +88,38 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
   useEffect(() => {
     fetchKeysDiagnostic();
+    try {
+      const stored = localStorage.getItem('leadflow_provider_keys');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed.serpapiKey) setSerpapiKey(parsed.serpapiKey);
+        if (parsed.googlePlacesKey) setGooglePlacesKey(parsed.googlePlacesKey);
+        if (parsed.geminiKey) setGeminiKey(parsed.geminiKey);
+        if (parsed.openrouterKey) setOpenrouterKey(parsed.openrouterKey);
+      }
+    } catch (e) {
+      // ignore
+    }
   }, []);
 
   const handleSaveKeys = async (e: React.FormEvent) => {
     e.preventDefault();
     setSavingKeys(true);
     setKeysSavedMessage(null);
+
+    try {
+      localStorage.setItem(
+        'leadflow_provider_keys',
+        JSON.stringify({
+          serpapiKey,
+          googlePlacesKey,
+          geminiKey,
+          openrouterKey,
+        })
+      );
+    } catch (e) {
+      // ignore
+    }
 
     const { ok, data } = await loggedFetch('/api/provider/config', {
       method: 'POST',

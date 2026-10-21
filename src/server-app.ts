@@ -8,10 +8,33 @@ import {
 } from "./providers/LiveDataProvider";
 import { executeAIGeneratedContent, cleanJsonText } from "./services/aiService";
 import { TailoredProposal, ClientProblemArchetype, SequenceStep, AutomatedSequence } from "./types";
+import { auditWebsiteLive } from "./services/websiteAuditEngine";
 
 export const app = express();
 
 app.use(express.json({ limit: "10mb" }));
+
+// Client Key Forwarder Middleware (Reads forwarded credentials from Netlify client headers)
+app.use((req, res, next) => {
+  const serpKey = req.headers["x-serpapi-key"] as string;
+  const geminiKey = req.headers["x-gemini-key"] as string;
+  const openrouterKey = req.headers["x-openrouter-key"] as string;
+  const googlePlacesKey = req.headers["x-google-places-key"] as string;
+
+  if (serpKey && !process.env.SERPAPI_API_KEY) {
+    process.env.SERPAPI_API_KEY = serpKey.trim();
+  }
+  if (geminiKey && !process.env.GEMINI_API_KEY) {
+    process.env.GEMINI_API_KEY = geminiKey.trim();
+  }
+  if (openrouterKey && !process.env.OPENROUTER_API_KEY) {
+    process.env.OPENROUTER_API_KEY = openrouterKey.trim();
+  }
+  if (googlePlacesKey && !process.env.GOOGLE_PLACES_API_KEY) {
+    process.env.GOOGLE_PLACES_API_KEY = googlePlacesKey.trim();
+  }
+  next();
+});
 
 // Helper to initialize GoogleGenAI with proper validation
 export const getAI = () => {
@@ -1180,23 +1203,76 @@ app.post("/api/enrich/company", async (req: Request, res: Response) => {
   }
 });
 
-// 13. Audit Credibility
+// 13. Real Website Audit Engine (DOM inspection, Latency, SSL, Viewport, CTAs)
+app.post("/api/audit/website", async (req: Request, res: Response) => {
+  try {
+    const { url } = req.body;
+    if (!url || typeof url !== "string") {
+      return res.status(400).json({ success: false, error: "Website URL is required" });
+    }
+    const auditResult = await auditWebsiteLive(url);
+    res.json({
+      success: true,
+      auditResult,
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      success: false,
+      error: err.message || "Failed to audit website",
+      code: "WEBSITE_AUDIT_ERROR",
+    });
+  }
+});
+
+// 13b. Audit Credibility (Real DOM & Transport Verification)
 app.post("/api/audit/credibility", async (req: Request, res: Response) => {
   try {
     const { website } = req.body;
-    const cleanUrl = website ? (website.startsWith("http") ? website : `https://${website}`) : "";
-    const hasSSL = cleanUrl.startsWith("https://");
+    if (!website) {
+      return res.json({
+        success: true,
+        credibility: {
+          hasSSL: false,
+          hasMobileViewport: false,
+          hasMetaTags: false,
+          seoGrade: "F",
+          credibilityScore: 20,
+          securityStatus: "Unknown",
+        },
+      });
+    }
+
+    const audit = await auditWebsiteLive(website);
+    const hasMetaTags = Boolean(audit.pageTitle && audit.metaDescription);
+    let seoGrade: "A+" | "A" | "B" | "C" | "D" | "F" = "C";
+    let credibilityScore = 50;
+
+    if (audit.hasSSL) credibilityScore += 25;
+    if (audit.hasMobileViewport) credibilityScore += 15;
+    if (hasMetaTags) credibilityScore += 10;
+    if (audit.hasCTA) credibilityScore += 10;
+    if (audit.isReachable) credibilityScore += 10;
+
+    credibilityScore = Math.min(100, credibilityScore);
+
+    if (credibilityScore >= 90) seoGrade = "A+";
+    else if (credibilityScore >= 80) seoGrade = "A";
+    else if (credibilityScore >= 65) seoGrade = "B";
+    else if (credibilityScore >= 50) seoGrade = "C";
+    else if (credibilityScore >= 35) seoGrade = "D";
+    else seoGrade = "F";
 
     res.json({
       success: true,
       credibility: {
-        hasSSL,
-        hasMobileViewport: true,
-        hasMetaTags: true,
-        seoGrade: "B",
-        credibilityScore: hasSSL ? 85 : 55,
-        securityStatus: hasSSL ? "Secure (HTTPS)" : "HTTP Only",
+        hasSSL: audit.hasSSL,
+        hasMobileViewport: audit.hasMobileViewport,
+        hasMetaTags,
+        seoGrade,
+        credibilityScore,
+        securityStatus: audit.hasSSL ? "Secure (HTTPS)" : "Not Secure (HTTP)",
       },
+      auditResult: audit,
     });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message, code: "AUDIT_CREDIBILITY_ERROR" });

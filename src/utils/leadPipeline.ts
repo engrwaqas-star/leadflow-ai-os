@@ -1,25 +1,65 @@
-import { Lead, SuppressedDomainRecord } from '../types';
+import { Lead, LeadStage, LeadStrategy, SuppressedDomainRecord } from '../types';
 
 export interface ScoreBreakdown {
   totalScore: number;
-  intentScore: number; // max 30
-  needScore: number; // max 25
-  skillScore: number; // max 20
-  valueScore: number; // max 15
-  contactabilityScore: number; // max 10
+  budgetPotentialScore: number; // max 25 ($2,000+ budget potential)
+  needScore: number; // max 20 (immediate or possible developer need)
+  skillMatchScore: number; // max 20 (React/Tailwind/HTML/CSS/Node)
+  clientQualityScore: number; // max 15 (legitimate founder/business/agency)
+  projectQualityScore: number; // max 10 (portfolio/case-study potential)
+  relationshipPotentialScore: number; // max 10 (recurring/long-term potential)
+  // Legacy compatibility aliases
+  intentScore: number;
+  valueScore: number;
+  contactabilityScore: number;
   scoreExplanation: string[];
   skillMatchStatus: 'EXCELLENT' | 'GOOD' | 'SKILL_GAP';
   matchedSkills: string[];
   skillGaps: string[];
+  skillGapWarning?: string;
+  category: 'HOT LEAD' | 'STRONG LEAD' | 'POTENTIAL LEAD' | 'LOW PRIORITY' | 'REJECT';
 }
 
 export interface ValueEstimate {
-  estimatedValueRange: string;
-  confidence: 'High' | 'Medium' | 'Low';
+  estimatedValueRange: string | null;
+  confidence: 'High' | 'Medium' | 'Low' | 'Unverified';
   reasons: string[];
   recommendedService: string;
   recommendedPortfolioProject: string;
   disclaimer: string;
+}
+
+/**
+ * Determine accurate LeadStage in the 9-stage pipeline
+ * DISCOVERED → IDENTITY VERIFIED → WEBSITE REVIEWED → OPPORTUNITY QUALIFIED → CONTACT READY → OUTREACH DRAFTED → CONTACTED → REPLIED → WON / LOST
+ */
+export function determineLeadStage(lead: Partial<Lead>): LeadStage {
+  if (lead.contactStatus === 'Closed Won') return 'WON';
+  if (lead.contactStatus === 'Closed Lost' || lead.contactStatus === 'Declined') return 'LOST';
+  if (lead.contactStatus === 'Replied' || lead.contactStatus === 'Negotiating') return 'REPLIED';
+  if (lead.contactStatus === 'Contacted' || lead.contactStatus === 'Follow-Up Due') return 'CONTACTED';
+  
+  if (lead.stage === 'OUTREACH_DRAFTED') return 'OUTREACH_DRAFTED';
+  
+  const hasDirectContact = Boolean(lead.email && lead.email !== 'Not found' && !lead.email.includes('example.com') && !lead.email.includes('domain.com'));
+  
+  // Audited and has concrete issues or strengths
+  if (lead.auditStatus === 'Audited' && lead.auditDetails?.isReachable) {
+    if (hasDirectContact) return 'CONTACT_READY';
+    return 'OPPORTUNITY_QUALIFIED';
+  }
+
+  // Website was reviewed / probed
+  if (lead.auditStatus === 'Audited' || lead.auditDetails) {
+    return 'WEBSITE_REVIEWED';
+  }
+
+  // Identity verified
+  if (lead.verificationStatus === 'VERIFIED' || (lead.verificationScore && lead.verificationScore >= 70)) {
+    return 'IDENTITY_VERIFIED';
+  }
+
+  return 'DISCOVERED';
 }
 
 /**
@@ -28,13 +68,10 @@ export interface ValueEstimate {
 export function normalizeDomain(input?: string): string {
   if (!input) return '';
   let str = input.toLowerCase().trim();
-  // If email
   if (str.includes('@')) {
     str = str.split('@')[1] || '';
   }
-  // Strip protocol and www
   str = str.replace(/^https?:\/\//, '').replace(/^www\./, '');
-  // Strip path & query params
   str = str.split('/')[0].split('?')[0].split('#')[0];
   return str;
 }
@@ -101,110 +138,184 @@ export function checkIsDuplicate(
 }
 
 /**
- * Calculate explainable lead acquisition score (0-100)
+ * Calculate Agent Kashi 0-100 Rubric Qualification Score
+ * Budget Potential (25) | Need (20) | Skill Match (20) | Client Quality (15) | Project Quality (10) | Relationship Potential (10)
  */
 export function calculateExplainableScore(
   lead: Partial<Lead>,
-  userProfileSkills: string[] = ['HTML5', 'CSS3', 'JavaScript', 'React', 'Responsive Web Design', 'Frontend UI Development', 'Git', 'GitHub']
+  userProfileSkills: string[] = ['HTML5', 'CSS3', 'JavaScript', 'React', 'TypeScript', 'Tailwind CSS', 'Node.js', 'Express', 'Git', 'Responsive Design']
 ): ScoreBreakdown {
   const normSkills = userProfileSkills.map((s) => s.toLowerCase());
+  const auditText = `${lead.websiteStatus || ''} ${lead.auditIssue || ''} ${(lead.auditDetails?.auditIssues || []).join(' ')}`.toLowerCase();
+  const serviceText = (lead.suggestedService || '').toLowerCase();
+  const industryText = (lead.industry || '').toLowerCase();
 
-  // 1. Intent Score (max 30)
-  let intentScore = 20;
-  if (lead.temperature === 'HOT') intentScore = 28;
-  else if (lead.temperature === 'WARM') intentScore = 24;
-  else if (lead.temperature === 'POTENTIAL') intentScore = 18;
-  else intentScore = 12;
-
-  // 2. Need Score (max 25)
-  let needScore = 18;
-  const auditText = `${lead.websiteStatus || ''} ${lead.auditIssue || ''}`.toLowerCase();
-  if (auditText.includes('slow') || auditText.includes('mobile') || auditText.includes('outdated')) {
-    needScore += 5;
+  // 1. Budget Potential (max 25 pts)
+  // 25 = $2,000+ budget, 20 = $1k–$2k, 15 = moderate, 5 = low
+  let budgetPotentialScore = 15;
+  if (serviceText.includes('saas') || serviceText.includes('portal') || serviceText.includes('dashboard') || serviceText.includes('mvp') || industryText.includes('saas') || industryText.includes('tech')) {
+    budgetPotentialScore = 25; // High-value $2k+ scope
+  } else if (serviceText.includes('e-commerce') || serviceText.includes('booking') || industryText.includes('agency')) {
+    budgetPotentialScore = 20; // $1k - $2k range
+  } else if (auditText.includes('modernization') || auditText.includes('redesign')) {
+    budgetPotentialScore = 18;
+  } else {
+    budgetPotentialScore = 12;
   }
-  if (auditText.includes('booking') || auditText.includes('cta') || auditText.includes('conversion')) {
-    needScore += 2;
-  }
-  needScore = Math.min(25, needScore);
 
-  // 3. Skill Match Score (max 20)
-  const reqTechs = (lead.suggestedService || '').toLowerCase();
+  // 2. Need Score (max 20 pts)
+  // 20 = obvious immediate developer need, 10 = possible need
+  let needScore = 10;
+  if (lead.auditDetails && !lead.auditDetails.hasMobileViewport) {
+    needScore = 20; // Verified critical responsive defect
+  } else if (lead.auditDetails && lead.auditDetails.responseTimeMs && lead.auditDetails.responseTimeMs > 2000) {
+    needScore = 18; // Proven speed bottleneck
+  } else if (auditText.includes('viewport') || auditText.includes('mobile') || auditText.includes('slow')) {
+    needScore = 17;
+  } else if (auditText.includes('cta') || auditText.includes('conversion') || auditText.includes('booking')) {
+    needScore = 15;
+  } else if (lead.website && lead.website !== 'Not found') {
+    needScore = 12;
+  } else {
+    needScore = 6;
+  }
+
+  // 3. Skill Match (max 20 pts)
+  // 20 = excellent match with React/Tailwind/HTML/CSS/Node
   const matchedSkills: string[] = [];
   const skillGaps: string[] = [];
+  const checkTechs = ['react', 'tailwind', 'javascript', 'html', 'css', 'typescript', 'node'];
+  const advancedTechs = ['angular', 'vue', 'python', 'django', 'php', 'laravel', 'flutter', 'ruby', 'aws lambda'];
 
-  const coreSkills = ['react', 'javascript', 'html', 'css', 'responsive', 'ui', 'tailwind', 'node', 'typescript', 'next.js'];
-
-  coreSkills.forEach((tech) => {
-    if (reqTechs.includes(tech) || auditText.includes(tech)) {
-      if (normSkills.some((s) => s.includes(tech))) {
-        matchedSkills.push(tech.toUpperCase());
-      } else if (tech === 'node' || tech === 'typescript' || tech === 'next.js') {
-        skillGaps.push(tech.toUpperCase());
-      }
+  checkTechs.forEach((tech) => {
+    if (serviceText.includes(tech) || auditText.includes(tech)) {
+      matchedSkills.push(tech.toUpperCase());
     }
   });
 
-  let skillScore = 18;
+  advancedTechs.forEach((adv) => {
+    if (serviceText.includes(adv) || auditText.includes(adv)) {
+      skillGaps.push(adv.toUpperCase());
+    }
+  });
+
+  let skillMatchScore = 18;
   let skillMatchStatus: 'EXCELLENT' | 'GOOD' | 'SKILL_GAP' = 'EXCELLENT';
+  let skillGapWarning: string | undefined = undefined;
 
   if (skillGaps.length > 0) {
-    skillScore -= 6;
+    skillMatchScore = 10;
     skillMatchStatus = 'SKILL_GAP';
-  } else if (matchedSkills.length >= 2) {
-    skillScore = 20;
+    skillGapWarning = `SKILL GAP — VERIFY BEFORE OUTREACH: Client requirement mentions ${skillGaps.join(', ')}`;
+  } else if (matchedSkills.length >= 1 || serviceText.includes('frontend') || serviceText.includes('responsive')) {
+    skillMatchScore = 20;
     skillMatchStatus = 'EXCELLENT';
+    if (matchedSkills.length === 0) matchedSkills.push('REACT', 'TAILWIND');
   } else {
-    skillScore = 16;
+    skillMatchScore = 15;
     skillMatchStatus = 'GOOD';
   }
 
-  // 4. Project Value Score (max 15)
-  let valueScore = 12;
-  if (lead.suggestedService?.toLowerCase().includes('saas') || lead.suggestedService?.toLowerCase().includes('portal') || lead.suggestedService?.toLowerCase().includes('dashboard')) {
-    valueScore = 15;
-  } else if (lead.suggestedService?.toLowerCase().includes('redesign') || lead.suggestedService?.toLowerCase().includes('e-commerce')) {
-    valueScore = 13;
+  // 4. Client Quality (max 15 pts)
+  // 15 = legitimate founder/business/agency
+  let clientQualityScore = 8;
+  if (lead.verificationStatus === 'VERIFIED') clientQualityScore += 4;
+  if (lead.phone && lead.phone !== 'Not found') clientQualityScore += 2;
+  if (lead.email && lead.email !== 'Not found' && !lead.email.includes('example.com')) clientQualityScore += 1;
+  clientQualityScore = Math.min(15, clientQualityScore);
+
+  // 5. Project Quality (max 10 pts)
+  // 10 = excellent portfolio/case-study opportunity
+  let projectQualityScore = 7;
+  if (serviceText.includes('saas') || serviceText.includes('dashboard') || serviceText.includes('portal') || serviceText.includes('redesign')) {
+    projectQualityScore = 10;
+  } else if (industryText.includes('agency') || industryText.includes('healthcare') || industryText.includes('education')) {
+    projectQualityScore = 9;
   }
 
-  // 5. Contactability Score (max 10)
-  let contactabilityScore = 6;
-  if (lead.email && !lead.email.includes('example.com')) contactabilityScore += 2;
-  if (lead.phone) contactabilityScore += 1;
-  if (lead.contactPerson && !lead.contactPerson.includes('Owner')) contactabilityScore += 1;
-  contactabilityScore = Math.min(10, contactabilityScore);
+  // 6. Relationship Potential (max 10 pts)
+  // 10 = recurring/long-term potential (agencies, growing startups)
+  let relationshipPotentialScore = 6;
+  if (lead.leadStrategy === 'AGENCY_PARTNERSHIPS' || industryText.includes('agency')) {
+    relationshipPotentialScore = 10; // Ongoing white-label contract potential
+  } else if (serviceText.includes('saas') || industryText.includes('startup')) {
+    relationshipPotentialScore = 9;
+  }
 
-  const totalScore = intentScore + needScore + skillScore + valueScore + contactabilityScore;
+  const totalScore = Math.min(
+    100,
+    budgetPotentialScore + needScore + skillMatchScore + clientQualityScore + projectQualityScore + relationshipPotentialScore
+  );
+
+  let category: 'HOT LEAD' | 'STRONG LEAD' | 'POTENTIAL LEAD' | 'LOW PRIORITY' | 'REJECT' = 'POTENTIAL LEAD';
+  if (totalScore >= 80) category = 'HOT LEAD';
+  else if (totalScore >= 65) category = 'STRONG LEAD';
+  else if (totalScore >= 50) category = 'POTENTIAL LEAD';
+  else if (totalScore >= 30) category = 'LOW PRIORITY';
+  else category = 'REJECT';
 
   const scoreExplanation = [
-    `Intent Level: ${intentScore}/30 pts (${lead.temperature || 'WARM'} buyer intent signal)`,
-    `Website & UI Need: ${needScore}/25 pts (${lead.auditIssue || 'Optimization required'})`,
-    `Technical Skill Match: ${skillScore}/20 pts (${matchedSkills.join(', ') || 'React/HTML/CSS'})`,
-    `Project Value Potential: ${valueScore}/15 pts (${lead.suggestedService || 'Custom Frontend'})`,
-    `Contactability & Reach: ${contactabilityScore}/10 pts (${lead.email ? 'Direct email verified' : 'General web contact'})`,
+    `Budget Potential: ${budgetPotentialScore}/25 pts (${budgetPotentialScore >= 20 ? '$2,000+ budget potential' : 'Standard budget tier'})`,
+    `Technical Need: ${needScore}/20 pts (${lead.auditIssue || 'Optimization scope identified'})`,
+    `Skill Match: ${skillMatchScore}/20 pts (${matchedSkills.join(', ') || 'Frontend React/Tailwind'})`,
+    `Client Legitimacy: ${clientQualityScore}/15 pts (${lead.verificationStatus === 'VERIFIED' ? 'Verified business identity' : 'Unconfirmed business identity'})`,
+    `Case-Study Value: ${projectQualityScore}/10 pts (Portfolio relevance)`,
+    `Relationship Potential: ${relationshipPotentialScore}/10 pts (${lead.leadStrategy === 'AGENCY_PARTNERSHIPS' ? 'Agency subcontracting partner' : 'Direct client engagement'})`,
   ];
 
   return {
     totalScore,
-    intentScore,
+    budgetPotentialScore,
     needScore,
-    skillScore,
-    valueScore,
-    contactabilityScore,
+    skillMatchScore,
+    clientQualityScore,
+    projectQualityScore,
+    relationshipPotentialScore,
+    // Aliases
+    intentScore: budgetPotentialScore,
+    valueScore: clientQualityScore,
+    contactabilityScore: needScore,
     scoreExplanation,
     skillMatchStatus,
     matchedSkills,
     skillGaps,
+    skillGapWarning,
+    category,
   };
 }
 
 /**
- * Estimate realistic project value scope ($2,000+ Mode)
+ * Estimate project value scope ($2,000+ Mode)
+ * Strictly evidence-based: Returns null if no verified project scope exists!
  */
 export function estimateProjectValue(lead: Partial<Lead>): ValueEstimate {
   const service = (lead.suggestedService || '').toLowerCase();
   const industry = (lead.industry || '').toLowerCase();
+  const hasAuditEvidence = Boolean(lead.auditDetails?.isReachable && lead.auditDetails.auditIssues?.length > 0);
+  const hasScopeSignal = Boolean(
+    service.includes('saas') ||
+    service.includes('dashboard') ||
+    service.includes('portal') ||
+    service.includes('mvp') ||
+    service.includes('e-commerce') ||
+    service.includes('modernization') ||
+    service.includes('redesign') ||
+    hasAuditEvidence
+  );
 
-  let estimatedValueRange = '$2,000 – $3,500';
+  // If the only evidence is that a business exists and has a website without scope: store null!
+  if (!hasScopeSignal && (!lead.auditStatus || lead.auditStatus === 'Pending')) {
+    return {
+      estimatedValueRange: null,
+      confidence: 'Unverified',
+      reasons: ['No verified website audit or scope requirements collected yet.'],
+      recommendedService: lead.suggestedService || 'Website Review & Technical Audit',
+      recommendedPortfolioProject: 'Custom Frontend Development',
+      disclaimer: 'Budget range is withheld until live technical audit or client discovery confirms implementation scope.',
+    };
+  }
+
+  let estimatedValueRange: string | null = '$2,000 – $3,500';
   let confidence: 'High' | 'Medium' | 'Low' = 'Medium';
   let recommendedPortfolioProject = 'Modern Responsive Business Site';
   const reasons: string[] = [
@@ -236,6 +347,6 @@ export function estimateProjectValue(lead: Partial<Lead>): ValueEstimate {
     reasons,
     recommendedService: lead.suggestedService || 'Modern Responsive React Redesign',
     recommendedPortfolioProject,
-    disclaimer: 'Estimated from scope and functionality requirement. Actual client budget subject to discovery call.',
+    disclaimer: 'Estimated from documented scope and functionality requirements. Final contract subject to technical discovery.',
   };
 }

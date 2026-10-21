@@ -27,9 +27,19 @@ import {
   Save,
   FileText,
   Play,
-  Maximize2
+  Maximize2,
+  Globe,
+  Gauge,
+  Lock,
+  Unlock,
+  Terminal,
+  FileCheck2,
+  Sliders,
+  ChevronRight,
+  Loader2
 } from 'lucide-react';
-import { Lead } from '../types';
+import { Lead, WebsiteAuditResult, FindingItem } from '../types';
+import { loggedFetch } from '../utils/apiLogger';
 
 interface AuditModalProps {
   isOpen: boolean;
@@ -46,6 +56,44 @@ export const AuditModal: React.FC<AuditModalProps> = ({
   onUpdateLead,
   onOpenEmail,
 }) => {
+  const [isRunningLiveAudit, setIsRunningLiveAudit] = useState(false);
+  const [liveAuditResult, setLiveAuditResult] = useState<WebsiteAuditResult | null>(lead?.auditDetails || null);
+  const [liveAuditError, setLiveAuditError] = useState<string | null>(null);
+
+  const handleRunLiveAudit = async () => {
+    if (!lead?.website || lead.website === 'Not found') {
+      setLiveAuditError('No valid website URL associated with this lead.');
+      return;
+    }
+    setIsRunningLiveAudit(true);
+    setLiveAuditError(null);
+
+    const { ok, data, error } = await loggedFetch('/api/audit/website', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: lead.website }),
+    });
+
+    if (ok && data?.success && data?.auditResult) {
+      const res: WebsiteAuditResult = data.auditResult;
+      setLiveAuditResult(res);
+      if (onUpdateLead) {
+        onUpdateLead({
+          ...lead,
+          auditDetails: res,
+          auditStatus: 'Audited',
+          stage: 'WEBSITE_REVIEWED',
+          mobileViewport: res.hasMobileViewport,
+          clearCTA: res.hasCTA,
+          speedRating: res.speedRating === 'Unreachable' ? 'Slow' : res.speedRating,
+          auditIssue: res.auditIssues[0] || (res.isReachable ? 'Responsive layout verified' : 'Website unreachable'),
+        });
+      }
+    } else {
+      setLiveAuditError(error || data?.error || 'Live website audit failed.');
+    }
+    setIsRunningLiveAudit(false);
+  };
   const [isCapturing, setIsCapturing] = useState(false);
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
   const [isRecordingVideo, setIsRecordingVideo] = useState(false);
@@ -613,6 +661,198 @@ export const AuditModal: React.FC<AuditModalProps> = ({
 
         {activeTab === 'audit' && (
           <div className="space-y-4">
+            {/* Live Website Audit Engine (Real DOM, Transport & Timing Verification) */}
+            <div className="bg-white rounded-2xl p-5 border-2 border-indigo-200 shadow-sm space-y-4">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-extrabold text-sm text-slate-900 flex items-center gap-1.5">
+                      <Gauge className="w-4 h-4 text-indigo-600" /> Real HTTP & DOM Website Inspection Engine
+                    </span>
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                      liveAuditResult?.isReachable 
+                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200' 
+                        : 'bg-amber-50 text-amber-700 border-amber-200'
+                    }`}>
+                      {liveAuditResult?.isReachable ? 'Live Audit Verified' : 'Audit Pending'}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Probes public domain directly. Checks SSL, measured latency, responsive &lt;meta&gt; viewport, and conversion pathways. Zero synthetic scores.
+                  </p>
+                </div>
+
+                <button
+                  onClick={handleRunLiveAudit}
+                  disabled={isRunningLiveAudit || !lead.website || lead.website === 'Not found'}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-extrabold text-xs rounded-xl transition flex items-center gap-1.5 shadow-sm shrink-0"
+                >
+                  {isRunningLiveAudit ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" /> Probing {lead.website}...
+                    </>
+                  ) : (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5" /> Run Real Website Audit
+                    </>
+                  )}
+                </button>
+              </div>
+
+              {liveAuditError && (
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 flex items-center gap-2 font-medium">
+                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span>{liveAuditError}</span>
+                </div>
+              )}
+
+              {liveAuditResult ? (
+                <div className="space-y-4 pt-1">
+                  {/* Verified Metadata Bar */}
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] bg-slate-50 p-2.5 rounded-xl border border-slate-200 font-mono text-slate-600">
+                    <div>
+                      Tested URL: <strong className="text-slate-900">{liveAuditResult.cleanUrl || lead.website}</strong>
+                    </div>
+                    <div>
+                      Timestamp: <strong className="text-slate-900">{new Date(liveAuditResult.auditedAt).toLocaleString()}</strong>
+                    </div>
+                    <div>
+                      Status: <strong className={liveAuditResult.isReachable ? 'text-emerald-700' : 'text-rose-700'}>
+                        {liveAuditResult.httpStatus ? `HTTP ${liveAuditResult.httpStatus}` : (liveAuditResult.isReachable ? 'Reachable' : 'Unreachable')}
+                      </strong>
+                    </div>
+                  </div>
+
+                  {/* 4 Core Evidence Metric Cards */}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    {/* Response Timing */}
+                    <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
+                      <div className="text-[10px] uppercase font-bold text-slate-500 flex items-center gap-1">
+                        <Gauge className="w-3 h-3 text-indigo-500" /> Response Latency
+                      </div>
+                      <div className="text-base font-black text-slate-900 mt-1">
+                        {liveAuditResult.responseTimeMs ? `${liveAuditResult.responseTimeMs}ms` : 'N/A'}
+                      </div>
+                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                        liveAuditResult.speedRating === 'Fast' 
+                          ? 'bg-emerald-100 text-emerald-800' 
+                          : liveAuditResult.speedRating === 'Slow' 
+                            ? 'bg-rose-100 text-rose-800' 
+                            : 'bg-amber-100 text-amber-800'
+                      }`}>
+                        {liveAuditResult.speedRating}
+                      </span>
+                    </div>
+
+                    {/* SSL Verification */}
+                    <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
+                      <div className="text-[10px] uppercase font-bold text-slate-500 flex items-center gap-1">
+                        {liveAuditResult.hasSSL ? <Lock className="w-3 h-3 text-emerald-600" /> : <Unlock className="w-3 h-3 text-rose-600" />} SSL Security
+                      </div>
+                      <div className="text-sm font-black text-slate-900 mt-1">
+                        {liveAuditResult.hasSSL ? 'Secure (HTTPS)' : 'Insecure (HTTP)'}
+                      </div>
+                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${liveAuditResult.hasSSL ? 'text-emerald-700' : 'text-rose-700'}`}>
+                        {liveAuditResult.hasSSL ? 'TLS Verified' : 'Certificate Missing'}
+                      </span>
+                    </div>
+
+                    {/* Mobile Viewport */}
+                    <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
+                      <div className="text-[10px] uppercase font-bold text-slate-500 flex items-center gap-1">
+                        <Smartphone className="w-3 h-3 text-indigo-500" /> Mobile Viewport
+                      </div>
+                      <div className={`text-xs font-black mt-1 ${liveAuditResult.hasMobileViewport ? 'text-emerald-700' : 'text-rose-700'}`}>
+                        {liveAuditResult.hasMobileViewport ? 'Responsive Tag OK' : 'Missing Viewport'}
+                      </div>
+                      <div className="text-[10px] text-slate-500 truncate" title={liveAuditResult.viewportContent}>
+                        {liveAuditResult.viewportContent ? liveAuditResult.viewportContent.slice(0, 20) : 'No meta tag'}
+                      </div>
+                    </div>
+
+                    {/* Conversion Paths */}
+                    <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
+                      <div className="text-[10px] uppercase font-bold text-slate-500 flex items-center gap-1">
+                        <CheckCircle2 className="w-3 h-3 text-indigo-500" /> Conversion CTAs
+                      </div>
+                      <div className="text-sm font-black text-slate-900 mt-1">
+                        {liveAuditResult.hasCTA ? `${liveAuditResult.ctaElementsFound?.length || 1} Found` : 'None Found'}
+                      </div>
+                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${liveAuditResult.hasCTA ? 'text-emerald-700' : 'text-amber-700'}`}>
+                        {liveAuditResult.hasCTA ? 'Action Elements' : 'Conversion Bottleneck'}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Detected Tech Stack */}
+                  {liveAuditResult.detectedTech && liveAuditResult.detectedTech.length > 0 && (
+                    <div className="p-3 bg-slate-900 text-white rounded-xl flex items-center gap-2 text-xs">
+                      <span className="font-bold text-slate-400 text-[11px] uppercase shrink-0">Detected Stack:</span>
+                      <div className="flex flex-wrap gap-1.5">
+                        {liveAuditResult.detectedTech.map((tech) => (
+                          <span key={tech} className="px-2 py-0.5 bg-slate-800 text-indigo-300 font-bold text-[11px] rounded-md border border-slate-700">
+                            {tech}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Evidence Findings Breakdown (Observation, Evidence, Severity, Suggested Improvement) */}
+                  {liveAuditResult.findings && liveAuditResult.findings.length > 0 ? (
+                    <div className="space-y-2 pt-1">
+                      <div className="text-xs font-extrabold uppercase text-slate-700 tracking-wider">
+                        Documented Technical Findings ({liveAuditResult.findings.length})
+                      </div>
+                      <div className="space-y-2">
+                        {liveAuditResult.findings.map((finding, idx) => (
+                          <div 
+                            key={idx}
+                            className={`p-3 rounded-xl border text-xs space-y-1.5 ${
+                              finding.severity === 'CRITICAL' 
+                                ? 'bg-rose-50/70 border-rose-200 text-rose-950' 
+                                : finding.severity === 'WARNING'
+                                  ? 'bg-amber-50/70 border-amber-200 text-amber-950'
+                                  : 'bg-indigo-50/70 border-indigo-200 text-indigo-950'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between font-bold">
+                              <span className="flex items-center gap-1.5">
+                                {finding.severity === 'CRITICAL' ? (
+                                  <AlertTriangle className="w-3.5 h-3.5 text-rose-600" />
+                                ) : (
+                                  <CheckCircle2 className="w-3.5 h-3.5 text-amber-600" />
+                                )}
+                                {finding.observation}
+                              </span>
+                              <span className="text-[10px] uppercase px-1.5 py-0.5 rounded font-black bg-white/80 border">
+                                {finding.severity} ({finding.confidence}% confidence)
+                              </span>
+                            </div>
+                            <div className="text-[11px] text-slate-700">
+                              <strong>Evidence ({finding.source}):</strong> {finding.evidence}
+                            </div>
+                            <div className="text-[11px] text-slate-900 font-semibold bg-white/60 p-1.5 rounded">
+                              <strong>Recommended Fix:</strong> {finding.suggestedImprovement}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-900 font-medium">
+                      ✓ No critical mobile or responsiveness defects detected on the probed public page.
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="py-6 text-center bg-slate-50 rounded-xl border border-dashed border-slate-300 text-xs text-slate-500 space-y-2">
+                  <Globe className="w-6 h-6 text-slate-400 mx-auto" />
+                  <p>Click "Run Real Website Audit" above to test the live server response and verify mobile layout evidence.</p>
+                </div>
+              )}
+            </div>
+
             {/* Automated Screenshot & 40s Video Capture Section */}
             <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white rounded-2xl p-5 border border-slate-800 space-y-4 shadow-lg">
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-slate-800 pb-3">

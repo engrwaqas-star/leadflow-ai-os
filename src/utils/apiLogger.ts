@@ -64,8 +64,33 @@ export async function loggedFetch(url: string, options?: RequestInit): Promise<{
   let errorMsg: string | undefined = undefined;
   let errorCode: string | undefined = undefined;
 
+  // Extract client-side saved provider keys from localStorage
+  const forwardedHeaders: Record<string, string> = {};
+  if (typeof window !== 'undefined' && window.localStorage) {
+    try {
+      const rawKeys = localStorage.getItem('leadflow_provider_keys');
+      if (rawKeys) {
+        const parsed = JSON.parse(rawKeys);
+        if (parsed.serpapiKey) forwardedHeaders['x-serpapi-key'] = parsed.serpapiKey;
+        if (parsed.geminiKey) forwardedHeaders['x-gemini-key'] = parsed.geminiKey;
+        if (parsed.openrouterKey) forwardedHeaders['x-openrouter-key'] = parsed.openrouterKey;
+        if (parsed.googlePlacesKey) forwardedHeaders['x-google-places-key'] = parsed.googlePlacesKey;
+      }
+    } catch (e) {
+      // Ignore localStorage parse errors
+    }
+  }
+
+  const mergedHeaders = {
+    ...forwardedHeaders,
+    ...(options?.headers || {}),
+  };
+
   try {
-    const res = await fetch(url, options);
+    const res = await fetch(url, {
+      ...options,
+      headers: mergedHeaders,
+    });
     status = res.status;
     const durationMs = Math.round(performance.now() - startTime);
 

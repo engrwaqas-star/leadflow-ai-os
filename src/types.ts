@@ -57,6 +57,59 @@ export type CleanupReason =
   | 'suppressed_domain' 
   | 'manual';
 
+export type LeadStage =
+  | 'DISCOVERED'
+  | 'IDENTITY_VERIFIED'
+  | 'WEBSITE_REVIEWED'
+  | 'OPPORTUNITY_QUALIFIED'
+  | 'CONTACT_READY'
+  | 'OUTREACH_DRAFTED'
+  | 'CONTACTED'
+  | 'REPLIED'
+  | 'WON'
+  | 'LOST';
+
+export type LeadStrategy = 'DIRECT_CLIENTS' | 'AGENCY_PARTNERSHIPS';
+
+export interface FindingItem {
+  observation: string;
+  evidence: string;
+  source: string;
+  severity: 'CRITICAL' | 'WARNING' | 'INFO';
+  confidence: number; // 0-100
+  suggestedImprovement: string;
+  timestamp: string;
+}
+
+export interface WebsiteAuditResult {
+  url: string;
+  cleanUrl: string;
+  isReachable: boolean;
+  httpStatus?: number;
+  statusText?: string;
+  responseTimeMs?: number;
+  hasSSL: boolean;
+  hasMobileViewport: boolean;
+  viewportContent?: string;
+  pageTitle?: string;
+  metaDescription?: string;
+  h1Count?: number;
+  h1Text?: string;
+  hasCTA: boolean;
+  ctaElementsFound: string[];
+  hasPhoneLink: boolean;
+  hasEmailLink: boolean;
+  hasContactForm: boolean;
+  detectedTech: string[];
+  speedRating: 'Fast' | 'Average' | 'Slow' | 'Unreachable';
+  auditIssues: string[];
+  technicalStrengths: string[];
+  findings?: FindingItem[];
+  auditedAt: string;
+  rawPayloadBytes?: number;
+  errorMessage?: string;
+}
+
 export interface EvidenceItem {
   problem: string;
   evidence: string;
@@ -65,12 +118,20 @@ export interface EvidenceItem {
 }
 
 export interface LeadScoreBreakdown {
-  authenticityScore: number; // 0–20 pts (Business authenticity)
-  contactQualityScore: number; // 0–15 pts (Contact quality)
-  websiteOpportunityScore: number; // 0–25 pts (Website opportunity)
-  serviceFitScore: number; // 0–20 pts (Service fit)
-  commercialScore: number; // 0–10 pts (Commercial potential)
-  activityRecencyScore: number; // 0–10 pts (Activity/recency evidence)
+  // Agent Kashi 0-100 Rubric
+  budgetPotentialScore?: number; // 0–25 pts ($2,000+ budget)
+  needScore?: number; // 0–20 pts (immediate/possible developer need)
+  skillMatchScore?: number; // 0–20 pts (React/Tailwind/HTML/CSS/Node)
+  clientQualityScore?: number; // 0–15 pts (legitimate founder/business/agency)
+  projectQualityScore?: number; // 0–10 pts (portfolio/case-study potential)
+  relationshipPotentialScore?: number; // 0–10 pts (recurring/long-term potential)
+  // Legacy / Explainable fields
+  authenticityScore?: number; // 0–20 pts (Business authenticity)
+  contactQualityScore?: number; // 0–15 pts (Contact quality)
+  websiteOpportunityScore?: number; // 0–25 pts (Website opportunity)
+  serviceFitScore?: number; // 0–20 pts (Service fit)
+  commercialScore?: number; // 0–10 pts (Commercial potential)
+  activityRecencyScore?: number; // 0–10 pts (Activity/recency evidence)
   totalLeadScore: number; // 0–100 sum
 }
 
@@ -232,6 +293,14 @@ export interface Lead {
   // Enriched fields
   enrichment?: CompanyEnrichment;
   credibility?: CredibilityData;
+
+  // Lead Pipeline Stage (9 explicit stages)
+  stage?: LeadStage;
+  leadStrategy?: LeadStrategy;
+  estimatedBudget?: string | null;
+  niche?: string;
+  auditDetails?: WebsiteAuditResult;
+  skillGaps?: string[];
 
   // Cleanup & Data Management Fields
   archived?: boolean;

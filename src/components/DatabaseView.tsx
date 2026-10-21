@@ -26,12 +26,14 @@ import {
   Filter,
   Layers,
   RotateCcw,
-  X
+  X,
+  CheckCircle2
 } from 'lucide-react';
-import { Lead, Temperature, ContactStatus, CleanupReason } from '../types';
+import { Lead, Temperature, ContactStatus, CleanupReason, LeadStage, LeadStrategy } from '../types';
 import { createWhatsAppDeepLink, generateLeadWhatsAppPitch } from '../utils/whatsapp';
 import { LeadActionMenu } from './LeadActionMenu';
 import { ConfirmModal } from './ConfirmModal';
+import { determineLeadStage } from '../utils/leadPipeline';
 
 interface DatabaseViewProps {
   leads: Lead[];
@@ -214,6 +216,29 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
           </span>
         );
     }
+  };
+
+  const getStageBadge = (lead: Lead) => {
+    const currentStage: LeadStage = lead.stage || determineLeadStage(lead);
+    const badgeMap: Record<LeadStage, { label: string; bg: string; text: string; border: string }> = {
+      DISCOVERED: { label: 'Discovered', bg: 'bg-slate-100', text: 'text-slate-700', border: 'border-slate-300' },
+      IDENTITY_VERIFIED: { label: 'Identity Verified', bg: 'bg-blue-50', text: 'text-blue-800', border: 'border-blue-300' },
+      WEBSITE_REVIEWED: { label: 'Website Reviewed', bg: 'bg-purple-50', text: 'text-purple-800', border: 'border-purple-300' },
+      OPPORTUNITY_QUALIFIED: { label: 'Opportunity Qualified', bg: 'bg-indigo-50', text: 'text-indigo-800', border: 'border-indigo-300' },
+      CONTACT_READY: { label: 'Contact Ready', bg: 'bg-cyan-50', text: 'text-cyan-800', border: 'border-cyan-300' },
+      OUTREACH_DRAFTED: { label: 'Outreach Drafted', bg: 'bg-amber-50', text: 'text-amber-800', border: 'border-amber-300' },
+      CONTACTED: { label: 'Contacted', bg: 'bg-blue-100', text: 'text-blue-900', border: 'border-blue-400' },
+      REPLIED: { label: 'Replied 🎉', bg: 'bg-emerald-100', text: 'text-emerald-900', border: 'border-emerald-400' },
+      WON: { label: 'Closed Won 🏆', bg: 'bg-emerald-600', text: 'text-white', border: 'border-emerald-700' },
+      LOST: { label: 'Closed Lost', bg: 'bg-rose-100', text: 'text-rose-900', border: 'border-rose-300' },
+    };
+
+    const config = badgeMap[currentStage] || badgeMap.DISCOVERED;
+    return (
+      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${config.bg} ${config.text} border ${config.border}`}>
+        {config.label}
+      </span>
+    );
   };
 
   const renderCredibilityBadge = (lead: Lead) => {
@@ -508,10 +533,11 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
                     )}
                   </button>
                 </th>
-                <th className="p-3.5">Business & Intelligence</th>
+                <th className="p-3.5">Business & Strategy</th>
+                <th className="p-3.5">Pipeline Stage</th>
                 <th className="p-3.5">Contact Person</th>
-                <th className="p-3.5">Credibility</th>
-                <th className="p-3.5">Website</th>
+                <th className="p-3.5">Audit & Evidence</th>
+                <th className="p-3.5">Budget</th>
                 <th className="p-3.5">Score</th>
                 <th className="p-3.5">Temp</th>
                 <th className="p-3.5">Status</th>
@@ -521,7 +547,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
             <tbody className="divide-y divide-slate-200 text-slate-700">
               {filteredLeads.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="p-8 text-center text-slate-500">
+                  <td colSpan={10} className="p-8 text-center text-slate-500">
                     No matching client leads found for this filter.
                   </td>
                 </tr>
@@ -545,8 +571,17 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
                       </td>
 
                       <td className="p-3.5">
-                        <div className="font-bold text-slate-900 flex items-center gap-1.5">
+                        <div className="font-bold text-slate-900 flex items-center gap-1.5 flex-wrap">
                           {lead.businessName}
+                          {lead.leadStrategy === 'AGENCY_PARTNERSHIPS' ? (
+                            <span className="text-[9px] bg-indigo-50 text-indigo-700 px-1.5 py-0.2 rounded font-black uppercase border border-indigo-200">
+                              Agency Partner
+                            </span>
+                          ) : (
+                            <span className="text-[9px] bg-slate-100 text-slate-700 px-1.5 py-0.2 rounded font-black uppercase border border-slate-200">
+                              Direct Client
+                            </span>
+                          )}
                           {lead.archived && (
                             <span className="text-[9px] bg-amber-100 text-amber-800 px-1.5 py-0.2 rounded font-black uppercase">
                               Archived
@@ -576,12 +611,26 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
                         </div>
                         <div className="text-[11px] text-slate-500 flex items-center gap-2 mt-0.5">
                           <span>{lead.industry}</span>
-                          {lead.enrichment?.employeeCount && (
-                            <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-medium">
-                              {lead.enrichment.employeeCount}
-                            </span>
+                          {lead.website && lead.website !== 'Not found' && (
+                            <a
+                              href={lead.website.startsWith('http') ? lead.website : `https://${lead.website}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-indigo-600 hover:underline flex items-center gap-0.5"
+                            >
+                              {lead.website.replace(/^https?:\/\//, '').replace(/\/.*$/, '')} <ExternalLink className="w-2.5 h-2.5" />
+                            </a>
                           )}
                         </div>
+                        {lead.skillGaps && lead.skillGaps.length > 0 && (
+                          <div className="text-[10px] text-rose-700 font-extrabold bg-rose-50 px-1.5 py-0.5 rounded border border-rose-200 inline-block mt-1">
+                            SKILL GAP — VERIFY BEFORE OUTREACH: {lead.skillGaps.join(', ')}
+                          </div>
+                        )}
+                      </td>
+
+                      <td className="p-3.5">
+                        {getStageBadge(lead)}
                       </td>
 
                       <td className="p-3.5">
@@ -589,21 +638,39 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
                         <div className="text-[11px] text-slate-400">{lead.email}</div>
                       </td>
 
-                      <td className="p-3.5">{renderCredibilityBadge(lead)}</td>
+                      <td className="p-3.5">
+                        {lead.auditStatus === 'Audited' ? (
+                          <div className="space-y-0.5">
+                            <span className="inline-flex items-center gap-1 text-[10px] font-black text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-full border border-emerald-300">
+                              <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Audited
+                            </span>
+                            {lead.auditDetails?.responseTimeMs && (
+                              <div className="text-[10px] text-slate-500 font-mono">
+                                Latency: {lead.auditDetails.responseTimeMs}ms
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => onSelectLeadForAudit(lead)}
+                            className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-800 bg-amber-50 hover:bg-amber-100 px-2 py-0.5 rounded-full border border-amber-300 transition"
+                            title="Click to perform live technical website audit"
+                          >
+                            <RefreshCw className="w-2.5 h-2.5" /> Audit Pending
+                          </button>
+                        )}
+                      </td>
 
-                      <td className="p-3.5 text-indigo-600 font-medium">
-                        <a
-                          href={
-                            lead.website.startsWith('http')
-                              ? lead.website
-                              : `https://${lead.website}`
-                          }
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 hover:underline"
-                        >
-                          {lead.website} <ExternalLink className="w-3 h-3 text-slate-400" />
-                        </a>
+                      <td className="p-3.5 font-bold text-slate-900">
+                        {lead.estimatedBudget ? (
+                          <span className="text-emerald-700 font-extrabold text-xs">
+                            {lead.estimatedBudget}
+                          </span>
+                        ) : (
+                          <span className="text-slate-400 font-normal italic text-[11px]">
+                            Unverified
+                          </span>
+                        )}
                       </td>
 
                       <td className="p-3.5 font-extrabold text-sm text-slate-900">
