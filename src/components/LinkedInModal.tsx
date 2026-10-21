@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { loggedFetch } from '../utils/apiLogger';
 import {
   Linkedin,
   X,
@@ -54,7 +55,7 @@ export const LinkedInModal: React.FC<LinkedInModalProps> = ({
   const generateLinkedInPitch = async (customInst?: string) => {
     setLoading(true);
     try {
-      const res = await fetch('/api/ai/linkedin-pitch', {
+      const { ok, data } = await loggedFetch('/api/ai/linkedin-pitch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
@@ -63,8 +64,7 @@ export const LinkedInModal: React.FC<LinkedInModalProps> = ({
           userInstructions: customInst !== undefined ? customInst : userInstructions
         }),
       });
-      const data = await res.json();
-      if (data.success && data.pitch) {
+      if (ok && data?.success && data.pitch) {
         setConnectionNote(data.pitch.connectionNote || '');
         setInMailSubject(data.pitch.inMailSubject || '');
         setInMailBody(data.pitch.inMailBody || '');

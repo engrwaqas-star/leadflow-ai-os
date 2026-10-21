@@ -33,6 +33,7 @@ export const DataSourceConfigModal: React.FC<DataSourceConfigModalProps> = ({
 }) => {
   const [apiKey, setApiKey] = useState('');
   const [openrouterKey, setOpenrouterKey] = useState('');
+  const [googlePlacesKey, setGooglePlacesKey] = useState('');
   const [foursquareKey, setFoursquareKey] = useState('');
   const [serpapiKey, setSerpapiKey] = useState('');
   const [yelpKey, setYelpKey] = useState('');
@@ -99,6 +100,7 @@ export const DataSourceConfigModal: React.FC<DataSourceConfigModalProps> = ({
       body: JSON.stringify({ 
         apiKey, 
         openrouterKey,
+        googlePlacesKey,
         foursquareKey, 
         serpapiKey, 
         yelpKey, 
@@ -151,11 +153,11 @@ export const DataSourceConfigModal: React.FC<DataSourceConfigModalProps> = ({
             </label>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               {[
-                { id: 'google-search-live', name: 'Google Live Web Search', badge: 'Grounded Web', icon: Globe },
-                { id: 'foursquare-places', name: 'Foursquare Places API', badge: '500 Free Pro Calls', icon: MapPin },
-                { id: 'serpapi-search', name: 'SerpApi Google & Maps', badge: '250 Free Searches/Mo', icon: Search },
+                { id: 'serpapi-search', name: 'SerpApi Google & Maps', badge: 'PRIMARY REAL DISCOVERY', icon: Search },
+                { id: 'google-places', name: 'Google Places API', badge: 'OPTIONAL DISCOVERY', icon: MapPin },
+                { id: 'auto-multi', name: 'Multi-Source Lead Aggregator', badge: 'All Active Providers', icon: Layers },
+                { id: 'foursquare-places', name: 'Foursquare Places API', badge: '500 Free Calls', icon: MapPin },
                 { id: 'yelp-fusion', name: 'Yelp Fusion Places API', badge: 'Directory Listings', icon: Database },
-                { id: 'auto-multi', name: 'Multi-Source Aggregator', badge: 'All Active Providers', icon: Layers },
               ].map((p) => {
                 const Icon = p.icon;
                 const isSelected = selectedProviderId === p.id;
@@ -176,7 +178,13 @@ export const DataSourceConfigModal: React.FC<DataSourceConfigModalProps> = ({
                     <Icon className={`w-4 h-4 mt-0.5 shrink-0 ${isSelected ? 'text-indigo-600' : 'text-slate-500'}`} />
                     <div className="space-y-0.5">
                       <div className="font-extrabold text-xs">{p.name}</div>
-                      <span className="text-[10px] font-semibold text-slate-500 bg-white/80 px-1.5 py-0.5 rounded border border-slate-200 inline-block">
+                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border inline-block ${
+                        p.id === 'serpapi-search' 
+                          ? 'bg-indigo-100 text-indigo-800 border-indigo-200' 
+                          : p.id === 'google-places'
+                          ? 'bg-amber-50 text-amber-800 border-amber-200'
+                          : 'bg-white/80 text-slate-500 border-slate-200'
+                      }`}>
                         {p.badge}
                       </span>
                     </div>
@@ -209,7 +217,7 @@ export const DataSourceConfigModal: React.FC<DataSourceConfigModalProps> = ({
             </div>
 
             <div className="text-xs text-slate-300 space-y-1 font-medium">
-              <div>Selected: <strong className="text-white">{healthData?.providerName || 'Google Live Web Search Engine'}</strong></div>
+              <div>Selected: <strong className="text-white">{healthData?.providerName || 'SerpApi Google & Maps'}</strong></div>
               {healthData?.lastSuccessfulSearch && (
                 <div>Last Search: <strong className="text-white">{new Date(healthData.lastSuccessfulSearch).toLocaleTimeString()}</strong></div>
               )}
@@ -250,10 +258,44 @@ export const DataSourceConfigModal: React.FC<DataSourceConfigModalProps> = ({
           {/* Provider API Credentials Form */}
           <form onSubmit={handleSaveConfig} className="space-y-4 pt-2">
             <h4 className="font-extrabold text-xs text-slate-700 uppercase tracking-wider">
-              Optional Direct API Credentials
+              API Keys & Lead Provider Credentials
             </h4>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+              <div>
+                <label className="block font-bold text-slate-700 mb-1 flex items-center justify-between">
+                  <span>SerpAPI API Key (SERPAPI_API_KEY)</span>
+                  <span className="text-[10px] text-indigo-700 bg-indigo-50 px-1.5 py-0.2 rounded font-extrabold border border-indigo-200">Primary Discovery</span>
+                </label>
+                <div className="relative">
+                  <input
+                    type="password"
+                    value={serpapiKey}
+                    onChange={(e) => setSerpapiKey(e.target.value)}
+                    placeholder="SerpAPI private key..."
+                    className="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 pr-8 text-xs text-slate-800 font-mono focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                  />
+                  <Key className="w-3.5 h-3.5 text-slate-400 absolute right-2.5 top-3" />
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1 flex items-center justify-between">
+                  <span>Google Places Key (GOOGLE_PLACES_API_KEY)</span>
+                  <span className="text-[10px] text-amber-700 bg-amber-50 px-1.5 py-0.2 rounded font-extrabold border border-amber-200">Optional</span>
+                </label>
+                <div className="relative">
+                  <input
+                    type="password"
+                    value={googlePlacesKey}
+                    onChange={(e) => setGooglePlacesKey(e.target.value)}
+                    placeholder="Optional: Google Places API key..."
+                    className="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 pr-8 text-xs text-slate-800 font-mono focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                  />
+                  <Key className="w-3.5 h-3.5 text-slate-400 absolute right-2.5 top-3" />
+                </div>
+              </div>
+
               <div>
                 <label className="block font-bold text-slate-700 mb-1">
                   Gemini API Key (GEMINI_API_KEY)
@@ -305,22 +347,6 @@ export const DataSourceConfigModal: React.FC<DataSourceConfigModalProps> = ({
 
               <div>
                 <label className="block font-bold text-slate-700 mb-1">
-                  SerpApi Key (SERPAPI_API_KEY)
-                </label>
-                <div className="relative">
-                  <input
-                    type="password"
-                    value={serpapiKey}
-                    onChange={(e) => setSerpapiKey(e.target.value)}
-                    placeholder="Optional SerpApi key..."
-                    className="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 pr-8 text-xs text-slate-800 font-mono focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                  />
-                  <Key className="w-3.5 h-3.5 text-slate-400 absolute right-2.5 top-3" />
-                </div>
-              </div>
-
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">
                   Yelp Fusion Key (YELP_API_KEY)
                 </label>
                 <div className="relative">
@@ -337,7 +363,7 @@ export const DataSourceConfigModal: React.FC<DataSourceConfigModalProps> = ({
             </div>
 
             <p className="text-[11px] text-slate-500">
-              Note: If specific API keys are omitted, providers utilize Grounded Search Index mode to locate real directory listings.
+              Note: When SERPAPI_API_KEY is configured, LeadFlow searches Google & Maps in real-time. Google Places is fully optional.
             </p>
 
             <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-3">

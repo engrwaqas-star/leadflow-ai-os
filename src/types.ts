@@ -1,4 +1,4 @@
-export type Temperature = 'HOT' | 'WARM' | 'POTENTIAL' | 'LOW';
+export type Temperature = 'HOT' | 'HIGH' | 'GOOD' | 'WARM' | 'RESEARCH' | 'POTENTIAL' | 'LOW' | 'REJECT';
 
 export type ContactStatus = 
   | 'Not Contacted' 
@@ -8,7 +8,23 @@ export type ContactStatus =
   | 'Negotiating'
   | 'Closed Won' 
   | 'Declined'
-  | 'Closed Lost';
+  | 'Closed Lost'
+  | 'NO_VERIFIED_EMAIL'
+  | 'VERIFIED_EMAIL'
+  | 'FORM_ONLY'
+  | 'PHONE_ONLY';
+
+export type EmailStatus = 
+  | 'DRAFT' 
+  | 'APPROVED' 
+  | 'SENDING' 
+  | 'SENT' 
+  | 'SEND_FAILED' 
+  | 'BOUNCED' 
+  | 'REPLIED' 
+  | 'NO_REPLY' 
+  | 'UNSUBSCRIBED' 
+  | 'OPENED';
 
 export type SpeedRating = 'Fast' | 'Average' | 'Slow';
 
@@ -30,7 +46,82 @@ export type CleanupReason =
   | 'Bad Contact'
   | 'Bad Website'
   | 'Competitor'
-  | 'Other';
+  | 'Other'
+  | 'demo_data' 
+  | 'duplicate' 
+  | 'unresponsive' 
+  | 'invalid_contact' 
+  | 'bounced_email' 
+  | 'outdated_research' 
+  | 'not_a_fit' 
+  | 'suppressed_domain' 
+  | 'manual';
+
+export interface EvidenceItem {
+  problem: string;
+  evidence: string;
+  source: string;
+  confidence: number;
+}
+
+export interface LeadScoreBreakdown {
+  authenticityScore: number; // 0–20 pts (Business authenticity)
+  contactQualityScore: number; // 0–15 pts (Contact quality)
+  websiteOpportunityScore: number; // 0–25 pts (Website opportunity)
+  serviceFitScore: number; // 0–20 pts (Service fit)
+  commercialScore: number; // 0–10 pts (Commercial potential)
+  activityRecencyScore: number; // 0–10 pts (Activity/recency evidence)
+  totalLeadScore: number; // 0–100 sum
+}
+
+export interface OutreachQualityChecklist {
+  recipientEmailVerified: boolean;
+  businessIsReal: boolean;
+  personalizationEvidenceBased: boolean;
+  noFabricatedClaims: boolean;
+  noFakeStatistics: boolean;
+  noMisleadingStatements: boolean;
+  clearReasonForContacting: boolean;
+  conciseLength: boolean;
+  legitimateSenderIdentity: boolean;
+  optOutHandlingAvailable: boolean;
+  correctLeadAttached: boolean;
+  userApprovalRecorded: boolean;
+}
+
+export interface GmailMessageRecord {
+  id: string;
+  leadId: string;
+  businessName: string;
+  recipient: string;
+  sender: string;
+  subject: string;
+  body: string;
+  timestamp: string;
+  status: EmailStatus;
+  gmail_message_id?: string;
+  gmail_thread_id?: string;
+  errorCode?: string;
+  errorMessage?: string;
+  rawResponse?: any;
+  qualityChecklistPassed: boolean;
+  repliedAt?: string;
+  replySnippet?: string;
+}
+
+export interface DashboardMetrics {
+  totalDiscovered: number;
+  verified: number;
+  qualified: number;
+  hot: number;
+  outreachPrepared: number;
+  sent: number;
+  failed: number;
+  bounced: number;
+  replies: number;
+  meetings: number;
+  revenue: number;
+}
 
 export interface CompanyEnrichment {
   linkedinUrl?: string;
@@ -55,21 +146,43 @@ export interface CredibilityData {
 
 export interface Lead {
   id: string;
+  lead_id?: string;
   businessName: string;
+  business_name?: string;
   contactPerson: string;
   email: string;
+  email_source?: string;
+  google_place_id?: string;
+  source_urls?: string[];
+  rating?: number | null;
+  review_count?: number | null;
+  business_status?: string;
   phone: string;
   website: string;
   industry: string;
+  category?: string;
   country: string;
   city?: string;
   address?: string;
   score: number; // 0-100
+  lead_score?: number;
   temperature: Temperature;
+  lead_temperature?: Temperature;
   contactStatus: ContactStatus;
+  contact_status?: ContactStatus;
   websiteStatus: string;
   suggestedService: string;
+  recommended_service?: string;
   auditIssue: string;
+  source?: string;
+  sourceUrl?: string;
+  source_url?: string;
+  provider?: string;
+  provider_record_id?: string;
+  retrieved_at?: string;
+  problems?: string[];
+  evidence?: EvidenceItem[];
+  personalization_facts?: string[];
   pitchHook: string;
   lastContactDate?: string; // YYYY-MM-DD
   mobileViewport: boolean;
@@ -96,8 +209,16 @@ export interface Lead {
     afterFixes: string[];
     shareableProofLink: string;
   };
+  scoreBreakdown?: LeadScoreBreakdown;
+  authenticity_score?: number;
+  contact_quality_score?: number;
+  opportunity_score?: number;
+  service_fit_score?: number;
+  commercial_score?: number;
+  activity_recency_score?: number;
   verificationScore?: number;
   verificationStatus?: 'VERIFIED' | 'UNVERIFIED' | 'REJECTED';
+  verification_status?: 'VERIFIED' | 'UNVERIFIED' | 'REJECTED';
   fieldVerification?: {
     companyNameVerified: boolean;
     locationVerified: boolean;
@@ -188,7 +309,107 @@ export interface OutreachLog {
   channel?: 'Email' | 'LinkedIn';
 }
 
-export type IntentClassification = 'Interested' | 'Not Interested' | 'Pricing Query' | 'Follow-up';
+export type IntentClassification = 'Interested' | 'Not Interested' | 'Pricing Query' | 'Follow-up' | 'Meeting Request' | 'Technical Inquiry' | 'Scope Request';
+
+export type ClientProblemArchetype = 
+  | 'SPEED_PERFORMANCE'
+  | 'MOBILE_RESPONSIVENESS'
+  | 'LEGACY_CMS_REBUILD'
+  | 'STARTUP_MVP_VELOCITY'
+  | 'ECOMMERCE_CONVERSION'
+  | 'AGENCY_SUBCONTRACT'
+  | 'GENERAL_MODERNIZATION';
+
+export interface ProposalTier {
+  name: string;
+  price: string;
+  timeline: string;
+  deliverables: string[];
+  recommendedFor: string;
+}
+
+export interface TailoredProposal {
+  id: string;
+  leadId: string;
+  businessName: string;
+  website: string;
+  problemArchetype: ClientProblemArchetype;
+  archetypeTitle: string;
+  diagnosisSummary: string;
+  specificObservedIssues: string[];
+  technicalApproach: string;
+  techStackRecommended: string[];
+  tier1_QuickFix: ProposalTier;
+  tier2_Modernize: ProposalTier;
+  tier3_FullBuild: ProposalTier;
+  recommendedTier: 'tier1' | 'tier2' | 'tier3';
+  roiEstimate: string;
+  callToAction: string;
+  fullProposalMarkdown: string;
+  generatedAt: string;
+}
+
+export interface SequenceStep {
+  stepNumber: 1 | 2 | 3;
+  delayDays: 3 | 7 | 14;
+  title: string;
+  subject: string;
+  body: string;
+  scheduledDate: string; // YYYY-MM-DD
+  status: 'Pending' | 'Scheduled' | 'Sent' | 'Skipped' | 'Cancelled';
+  sentAt?: string;
+}
+
+export interface AutomatedSequence {
+  id: string;
+  leadId: string;
+  businessName: string;
+  contactPerson: string;
+  email: string;
+  initialContactDate: string; // YYYY-MM-DD
+  status: 'Active' | 'Completed' | 'Halted' | 'Paused' | 'Cancelled';
+  haltReason?: string;
+  currentStepIndex: number; // 0, 1, 2, 3 (completed)
+  steps: SequenceStep[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type SmartTagCategory = 
+  | 'Pricing' 
+  | 'Urgency' 
+  | 'Meeting' 
+  | 'Technical' 
+  | 'Proposal' 
+  | 'Follow-up' 
+  | 'Negative' 
+  | 'Custom';
+
+export interface SmartIntentTag {
+  id: string;
+  label: string; // e.g. 'High-Intent Pricing Query'
+  category: SmartTagCategory;
+  confidence: number; // 0 - 100
+  color: string; // e.g. 'emerald' | 'amber' | 'indigo' | 'rose' | 'purple' | 'cyan' | 'blue'
+  priority: 'CRITICAL_HOT' | 'HIGH' | 'MEDIUM' | 'LOW';
+  matchedRule: string;
+  suggestedAction: string;
+  keyPhrasesMatched?: string[];
+}
+
+export interface ClassifierRule {
+  id: string;
+  name: string;
+  targetTag: string;
+  category: SmartTagCategory;
+  priority: 'CRITICAL_HOT' | 'HIGH' | 'MEDIUM' | 'LOW';
+  triggerKeywords: string[];
+  intentSignals: string[];
+  negativeKeywords?: string[];
+  suggestedAction: string;
+  color: string;
+  enabled: boolean;
+}
 
 export interface InboundReply {
   id: string;
@@ -201,6 +422,16 @@ export interface InboundReply {
   receivedAt: string;
   sentiment: 'Hot Interest' | 'Price Inquiry' | 'Send Proposal' | 'Not Interested';
   intent?: IntentClassification;
+  smartTags?: SmartIntentTag[];
+  primaryIntentTag?: SmartIntentTag;
+  classificationDetails?: {
+    ruleName: string;
+    confidence: number;
+    explanation: string;
+    signals: string[];
+    classifiedAt: string;
+    provider?: string;
+  };
   read: boolean;
   replied?: boolean;
   repliedAt?: string;

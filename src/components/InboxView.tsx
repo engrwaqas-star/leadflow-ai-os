@@ -30,9 +30,23 @@ import {
   Tag,
   AlertTriangle,
   Calendar,
-  X
+  X,
+  Sliders,
+  Play,
+  Flame,
+  PhoneCall,
+  Wrench,
+  FileText,
+  Ban,
+  ShieldCheck,
+  ArrowRight
 } from 'lucide-react';
-import { Lead, InboundReply, UserProfile, OutreachLog, IntentClassification } from '../types';
+import { Lead, InboundReply, UserProfile, OutreachLog, IntentClassification, SmartIntentTag, ClassifierRule } from '../types';
+import { 
+  DEFAULT_CLASSIFIER_RULES, 
+  classifyMessageByRules, 
+  processAndSmartTagReply 
+} from '../services/smartClassifierService';
 
 interface InboxViewProps {
   inboundReplies: InboundReply[];
@@ -71,8 +85,13 @@ export const InboxView: React.FC<InboxViewProps> = ({
   pollAlert,
   onClearPollAlert,
 }) => {
+  // Ensure all replies have Smart Tags processed
+  const processedReplies = inboundReplies.map((r) => 
+    r.smartTags && r.smartTags.length > 0 ? r : processAndSmartTagReply(r)
+  );
+
   const [selectedReply, setSelectedReply] = useState<InboundReply | null>(
-    inboundReplies.length > 0 ? inboundReplies[0] : null
+    processedReplies.length > 0 ? processedReplies[0] : null
   );
   const [searchTerm, setSearchTerm] = useState('');
   const [inboxFilter, setInboxFilter] = useState<'all' | 'unread' | 'replied'>('all');
@@ -88,6 +107,14 @@ export const InboxView: React.FC<InboxViewProps> = ({
   const [copiedResponse, setCopiedResponse] = useState(false);
   const [simulating, setSimulating] = useState(false);
   const [sentSuccessNotice, setSentSuccessNotice] = useState<string | null>(null);
+
+  // Smart Classifier Rules Modal & Sandbox State
+  const [showRulesModal, setShowRulesModal] = useState(false);
+  const [sandboxSubject, setSandboxSubject] = useState('Quick question regarding website speed & pricing');
+  const [sandboxMessage, setSandboxMessage] = useState('Hi Waqas, we loved your audit! What are your package rates and pricing for a modern React frontend redesign? When can you start?');
+  const [sandboxResult, setSandboxResult] = useState<any>(() => 
+    classifyMessageByRules('Hi Waqas, we loved your audit! What are your package rates and pricing for a modern React frontend redesign? When can you start?', 'Quick question regarding website speed & pricing')
+  );
 
   // Duplicate Email Prevention Safeguard State
   const [showDuplicateModal, setShowDuplicateModal] = useState(false);
@@ -113,6 +140,14 @@ export const InboxView: React.FC<InboxViewProps> = ({
       onMarkReplyRead(selectedReply.id, true);
     }
   }, [selectedReply?.id]);
+
+  // Re-run sandbox classifier on input change
+  const handleTestSandbox = (msg: string, subj: string) => {
+    setSandboxMessage(msg);
+    setSandboxSubject(subj);
+    const res = classifyMessageByRules(msg, subj);
+    setSandboxResult(res);
+  };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files) return;
@@ -142,16 +177,17 @@ export const InboxView: React.FC<InboxViewProps> = ({
   };
 
   // Unread & Replied Count Calculations
-  const unreadCount = inboundReplies.filter((r) => !r.read && !r.replied).length;
-  const repliedCount = inboundReplies.filter((r) => r.replied).length;
+  const unreadCount = processedReplies.filter((r) => !r.read && !r.replied).length;
+  const repliedCount = processedReplies.filter((r) => r.replied).length;
 
-  // Filter replies with Intent Classification
-  const filteredReplies = inboundReplies.filter((reply) => {
+  // Filter replies with Intent Classification & Smart Tags
+  const filteredReplies = processedReplies.filter((reply) => {
     const matchesSearch =
       reply.businessName.toLowerCase().includes(searchTerm.toLowerCase()) ||
       reply.senderName.toLowerCase().includes(searchTerm.toLowerCase()) ||
       reply.subject.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      reply.message.toLowerCase().includes(searchTerm.toLowerCase());
+      reply.message.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (reply.smartTags && reply.smartTags.some((t) => t.label.toLowerCase().includes(searchTerm.toLowerCase())));
 
     if (!matchesSearch) return false;
 
@@ -159,12 +195,17 @@ export const InboxView: React.FC<InboxViewProps> = ({
     if (inboxFilter === 'replied' && !reply.replied) return false;
 
     if (intentFilter !== 'all') {
-      const currentIntent = reply.intent || (
-        reply.sentiment === 'Send Proposal' ? 'Interested' :
-        reply.sentiment === 'Price Inquiry' ? 'Pricing Query' :
-        reply.sentiment === 'Hot Interest' ? 'Interested' : 'Follow-up'
-      );
-      if (currentIntent !== intentFilter) return false;
+      const tagLabels = (reply.smartTags || []).map((t) => t.label);
+      const primaryLabel = reply.primaryIntentTag?.label || '';
+      const intentVal = reply.intent || '';
+
+      if (
+        primaryLabel !== intentFilter &&
+        !tagLabels.includes(intentFilter) &&
+        intentVal !== intentFilter
+      ) {
+        return false;
+      }
     }
 
     return true;
@@ -195,11 +236,19 @@ export const InboxView: React.FC<InboxViewProps> = ({
     setSimulating(false);
   };
 
-  // Classify Intent with AI
+  // Classify Intent & Smart Tag with AI and Rule Engine
   const handleClassifyIntent = async () => {
     if (!selectedReply) return;
     setIsClassifying(true);
     try {
+      // 1. Run local heuristic classifier rule engine
+      const ruleResult = classifyMessageByRules(
+        selectedReply.message,
+        selectedReply.subject,
+        selectedReply.sentiment
+      );
+
+      // 2. Call backend deep AI classification
       const res = await fetch('/api/ai/classify-intent', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -208,21 +257,97 @@ export const InboxView: React.FC<InboxViewProps> = ({
           subject: selectedReply.subject,
           senderName: selectedReply.senderName,
           businessName: selectedReply.businessName,
+          sentiment: selectedReply.sentiment,
         }),
       });
       const data = await res.json();
-      if (data.success && data.intent) {
-        const newIntent = data.intent as IntentClassification;
-        setSelectedReply((prev) => (prev ? { ...prev, intent: newIntent } : null));
-        // Update in inboundReplies reference
-        const target = inboundReplies.find((r) => r.id === selectedReply.id);
-        if (target) target.intent = newIntent;
+
+      let finalTags: SmartIntentTag[] = ruleResult.tags;
+      let primaryTag: SmartIntentTag = ruleResult.primaryTag;
+      let explanation = ruleResult.details.explanation;
+
+      if (data.success && data.primaryTag) {
+        primaryTag = {
+          id: `tag-${Date.now()}`,
+          label: data.primaryTag.label || ruleResult.primaryTag.label,
+          category: (data.primaryTag.category as any) || ruleResult.primaryTag.category,
+          confidence: data.primaryTag.confidence || 95,
+          color: data.primaryTag.color || ruleResult.primaryTag.color,
+          priority: data.primaryTag.priority || ruleResult.primaryTag.priority,
+          matchedRule: data.primaryTag.matchedRule || ruleResult.primaryTag.matchedRule,
+          suggestedAction: data.primaryTag.suggestedAction || ruleResult.primaryTag.suggestedAction,
+          keyPhrasesMatched: data.extractedSignals || ruleResult.primaryTag.keyPhrasesMatched,
+        };
+        if (data.smartTags && Array.isArray(data.smartTags)) {
+          finalTags = data.smartTags.map((st: any, idx: number) => ({
+            id: `tag-${Date.now()}-${idx}`,
+            label: st.label,
+            category: st.category,
+            confidence: st.confidence || 90,
+            color: st.color || 'emerald',
+            priority: st.priority || 'HIGH',
+            matchedRule: st.matchedRule || 'Smart Classifier Rule',
+            suggestedAction: st.suggestedAction || '',
+          }));
+        }
+        if (data.reasoning) {
+          explanation = data.reasoning;
+        }
+      }
+
+      const updated: InboundReply = {
+        ...selectedReply,
+        intent: (primaryTag.category === 'Pricing' ? 'Pricing Query' : primaryTag.category === 'Meeting' ? 'Meeting Request' : primaryTag.category === 'Urgency' ? 'Interested' : 'Follow-up') as IntentClassification,
+        smartTags: finalTags,
+        primaryIntentTag: primaryTag,
+        classificationDetails: {
+          ruleName: primaryTag.matchedRule,
+          confidence: primaryTag.confidence,
+          explanation,
+          signals: primaryTag.keyPhrasesMatched || [],
+          classifiedAt: new Date().toISOString(),
+          provider: data.provider,
+        },
+      };
+
+      setSelectedReply(updated);
+
+      // Also update in parent reference array
+      const target = inboundReplies.find((r) => r.id === selectedReply.id);
+      if (target) {
+        target.intent = updated.intent;
+        target.smartTags = finalTags;
+        target.primaryIntentTag = primaryTag;
+        target.classificationDetails = updated.classificationDetails;
       }
     } catch (err) {
-      console.error("Intent classification error:", err);
+      console.error('Intent classification error:', err);
     } finally {
       setIsClassifying(false);
     }
+  };
+
+  // One-click apply suggested strategy from Smart Tag
+  const handleApplySuggestedStrategy = () => {
+    if (!selectedReply) return;
+    const tag = selectedReply.primaryIntentTag || (selectedReply.smartTags && selectedReply.smartTags[0]);
+    if (!tag) return;
+
+    if (tag.category === 'Pricing') {
+      setReplyStrategy('technical_nocall');
+      setCustomNote(`Focus on ${tag.suggestedAction}. Detail 2 fixed package tiers ($450 core speed fix & $1,200 full modern rebuild) with 3-7 day turnaround.`);
+    } else if (tag.category === 'Meeting') {
+      setReplyStrategy('call_pitch');
+      setCustomNote(`Focus on booking a 15-minute Google Meet/Zoom video walkthrough. Offer Calendly link.`);
+    } else if (tag.category === 'Urgency') {
+      setReplyStrategy('technical_nocall');
+      setCustomNote(`High urgency project. Confirm immediate kickoff availability within 24 hours.`);
+    } else {
+      setReplyStrategy('technical_nocall');
+      setCustomNote(`Address specific client questions and attach GoFullPage audit benchmark.`);
+    }
+
+    generateAIFollowUpResponse();
   };
 
   const generateAIFollowUpResponse = async () => {
@@ -348,63 +473,47 @@ export const InboxView: React.FC<InboxViewProps> = ({
     setTimeout(() => setSentSuccessNotice(null), 5000);
   };
 
-  const getIntentBadge = (intent?: IntentClassification | string) => {
-    switch (intent) {
-      case 'Interested':
-        return (
-          <span className="px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center gap-1 shrink-0">
-            <Sparkles className="w-3 h-3 text-emerald-600" /> Interested
-          </span>
-        );
-      case 'Pricing Query':
-        return (
-          <span className="px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-amber-100 text-amber-800 border border-amber-300 flex items-center gap-1 shrink-0">
-            <Tag className="w-3 h-3 text-amber-600" /> Pricing Query
-          </span>
-        );
-      case 'Follow-up':
-        return (
-          <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-indigo-100 text-indigo-800 border border-indigo-300 flex items-center gap-1 shrink-0">
-            <Clock className="w-3 h-3 text-indigo-600" /> Follow-up
-          </span>
-        );
-      case 'Not Interested':
-        return (
-          <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-slate-100 text-slate-600 border border-slate-300 shrink-0">
-            Not Interested
-          </span>
-        );
-      default:
-        return (
-          <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-slate-100 text-slate-600 border border-slate-200 shrink-0">
-            Inbound
-          </span>
-        );
-    }
-  };
+  // Helper to render Smart Intent Tag Pills
+  const renderSmartTagBadge = (tag?: SmartIntentTag, showConfidence = true) => {
+    if (!tag) return null;
 
-  const getSentimentBadge = (sentiment: string) => {
-    switch (sentiment) {
-      case 'Hot Interest':
-      case 'Send Proposal':
-        return (
-          <span className="px-2.5 py-0.5 rounded-full text-[11px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center gap-1">
-            <Zap className="w-3 h-3 text-emerald-600 fill-emerald-600" /> {sentiment}
-          </span>
-        );
-      case 'Price Inquiry':
-        return (
-          <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
-            {sentiment}
-          </span>
-        );
-      default:
-        return (
-          <span className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-700 border border-slate-300">
-            {sentiment}
-          </span>
-        );
+    let bgClass = 'bg-emerald-50 text-emerald-800 border-emerald-300';
+    let icon = <Tag className="w-3 h-3 text-emerald-600" />;
+
+    if (tag.category === 'Pricing' || tag.label.includes('Pricing')) {
+      bgClass = 'bg-emerald-100 text-emerald-900 border-emerald-400';
+      icon = <Flame className="w-3 h-3 text-emerald-600 fill-emerald-500" />;
+    } else if (tag.category === 'Urgency' || tag.label.includes('Immediate')) {
+      bgClass = 'bg-amber-100 text-amber-900 border-amber-400';
+      icon = <Zap className="w-3 h-3 text-amber-600 fill-amber-500" />;
+    } else if (tag.category === 'Meeting' || tag.label.includes('Meeting')) {
+      bgClass = 'bg-indigo-100 text-indigo-900 border-indigo-400';
+      icon = <PhoneCall className="w-3 h-3 text-indigo-600" />;
+    } else if (tag.category === 'Technical' || tag.label.includes('Technical')) {
+      bgClass = 'bg-purple-100 text-purple-900 border-purple-400';
+      icon = <Wrench className="w-3 h-3 text-purple-600" />;
+    } else if (tag.category === 'Proposal' || tag.label.includes('Proposal')) {
+      bgClass = 'bg-blue-100 text-blue-900 border-blue-400';
+      icon = <FileText className="w-3 h-3 text-blue-600" />;
+    } else if (tag.category === 'Negative' || tag.label.includes('Declined')) {
+      bgClass = 'bg-rose-100 text-rose-800 border-rose-300';
+      icon = <Ban className="w-3 h-3 text-rose-600" />;
+    } else if (tag.category === 'Follow-up') {
+      bgClass = 'bg-cyan-100 text-cyan-900 border-cyan-400';
+      icon = <Clock className="w-3 h-3 text-cyan-600" />;
     }
+
+    return (
+      <span className={`px-2 py-0.5 rounded-lg text-[10px] font-extrabold border flex items-center gap-1 shrink-0 ${bgClass}`}>
+        {icon}
+        <span>{tag.label}</span>
+        {showConfidence && tag.confidence > 0 && (
+          <span className="opacity-75 font-semibold text-[9px] bg-white/60 px-1 rounded ml-0.5">
+            {tag.confidence}%
+          </span>
+        )}
+      </span>
+    );
   };
 
   return (
@@ -412,18 +521,29 @@ export const InboxView: React.FC<InboxViewProps> = ({
       {/* Top Header & Background Poller Status */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-slate-200 pb-5">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
-            Inbox & Technical Reply Studio
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
+              Inbox & Smart Tagging Studio
+            </h1>
             <span className="text-xs px-2.5 py-0.5 rounded-full bg-indigo-100 text-indigo-700 font-bold border border-indigo-200">
-              Gmail Auto-Synced
+              Smart Intent Classifier Active
             </span>
-          </h1>
+          </div>
           <p className="text-sm text-slate-500 mt-1">
-            Real-time mailbox monitoring, response status tracking & side-by-side proposal generator.
+            Real-time mailbox monitoring, automatic intent categorization (e.g., High-Intent Pricing Query), and proposal drafting.
           </p>
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Rules Engine Sandbox Button */}
+          <button
+            onClick={() => setShowRulesModal(true)}
+            className="flex items-center gap-1.5 px-3 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-xs rounded-xl border border-indigo-200 transition shadow-2xs"
+          >
+            <Sliders className="w-3.5 h-3.5" />
+            Classifier Rules Engine
+          </button>
+
           {/* Main View Mode Toggles */}
           <div className="bg-slate-200 p-1 rounded-xl flex items-center gap-1 text-xs font-bold">
             <button
@@ -456,7 +576,7 @@ export const InboxView: React.FC<InboxViewProps> = ({
             className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-bold text-xs rounded-xl shadow-sm transition disabled:opacity-50"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${simulating ? 'animate-spin' : ''}`} />
-            {simulating ? 'Simulating Webhook Response...' : 'Simulate Client Email Reply'}
+            {simulating ? 'Processing Webhook...' : 'Simulate Inbound Lead Reply'}
           </button>
         </div>
       </div>
@@ -481,9 +601,9 @@ export const InboxView: React.FC<InboxViewProps> = ({
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
             <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
           </div>
-          <span className="font-bold tracking-wide">30-Min Background Inbox Poller Active</span>
+          <span className="font-bold tracking-wide">Inbox Engine & Smart Classifier Active</span>
           <span className="text-slate-400 text-[11px] hidden sm:inline">
-            | Connected: <span className="font-semibold text-slate-200">{userProfile.email}</span>
+            | Polling Account: <span className="font-semibold text-slate-200">{userProfile.email}</span>
           </span>
           {lastPolledAt && (
             <span className="text-slate-400 text-[11px] hidden md:inline">
@@ -518,18 +638,18 @@ export const InboxView: React.FC<InboxViewProps> = ({
 
       {/* VIEW MODE 1: MAIN INBOX THREADS */}
       {activeMainTab === 'threads' && (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden min-h-[640px]">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden min-h-[660px]">
           {/* Left Column: Inbound Messages List */}
-          <div className="lg:col-span-3 border-r border-slate-200 flex flex-col bg-slate-50/50">
-            {/* Filter Tabs & Search & Intent Selector */}
-            <div className="p-3 bg-slate-50 border-b border-slate-200 space-y-2">
+          <div className="lg:col-span-4 xl:col-span-3 border-r border-slate-200 flex flex-col bg-slate-50/50">
+            {/* Filter Tabs & Search & Smart Tag Selector */}
+            <div className="p-3 bg-slate-50 border-b border-slate-200 space-y-2.5">
               <div className="relative">
                 <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
                 <input
                   type="text"
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  placeholder="Search inbound emails..."
+                  placeholder="Search messages & smart tags..."
                   className="w-full pl-9 pr-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                 />
               </div>
@@ -544,7 +664,7 @@ export const InboxView: React.FC<InboxViewProps> = ({
                       : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
                   }`}
                 >
-                  All ({inboundReplies.length})
+                  All ({processedReplies.length})
                 </button>
                 <button
                   onClick={() => setInboxFilter('unread')}
@@ -568,26 +688,30 @@ export const InboxView: React.FC<InboxViewProps> = ({
                 </button>
               </div>
 
-              {/* Intent Classification Filter */}
+              {/* Smart Tag Filter Dropdown */}
               <div className="flex items-center justify-between text-[11px] pt-1 border-t border-slate-200">
-                <span className="font-bold text-slate-500 flex items-center gap-1">
-                  <Tag className="w-3 h-3 text-indigo-600" /> Intent Filter:
+                <span className="font-bold text-slate-600 flex items-center gap-1">
+                  <Tag className="w-3 h-3 text-indigo-600" /> Smart Tag:
                 </span>
                 <select
                   value={intentFilter}
                   onChange={(e) => setIntentFilter(e.target.value)}
-                  className="bg-white border border-slate-300 rounded px-2 py-0.5 font-bold text-slate-800 focus:outline-none text-[11px]"
+                  className="bg-white border border-slate-300 rounded px-2 py-1 font-bold text-slate-800 focus:outline-none text-[11px] max-w-[170px]"
                 >
                   <option value="all">All Intent Tags</option>
-                  <option value="Interested">Interested (Hot Leads)</option>
-                  <option value="Pricing Query">Pricing Query</option>
-                  <option value="Follow-up">Follow-up</option>
-                  <option value="Not Interested">Not Interested</option>
+                  <option value="High-Intent Pricing Query">🔥 High-Intent Pricing</option>
+                  <option value="Immediate Project Need">⚡ Immediate Need</option>
+                  <option value="Meeting / Call Request">📞 Meeting Request</option>
+                  <option value="Technical Scope Inquiry">🛠️ Technical Scope</option>
+                  <option value="Proposal & SOW Request">📄 Proposal Request</option>
+                  <option value="Follow-up Due">⏳ Follow-up</option>
+                  <option value="Declined / Not Interested">🛑 Not Interested</option>
                 </select>
               </div>
             </div>
 
-            <div className="divide-y divide-slate-100 overflow-y-auto flex-1 max-h-[600px]">
+            {/* Inbound Threads List */}
+            <div className="divide-y divide-slate-100 overflow-y-auto flex-1 max-h-[640px]">
               {filteredReplies.length === 0 ? (
                 <div className="p-8 text-center text-slate-400 text-xs">
                   No messages found for this filter.
@@ -597,12 +721,7 @@ export const InboxView: React.FC<InboxViewProps> = ({
                   const isSelected = selectedReply?.id === reply.id;
                   const isReplied = reply.replied === true;
                   const isUnread = !reply.read && !isReplied;
-
-                  const currentIntent = reply.intent || (
-                    reply.sentiment === 'Send Proposal' ? 'Interested' :
-                    reply.sentiment === 'Price Inquiry' ? 'Pricing Query' :
-                    reply.sentiment === 'Hot Interest' ? 'Interested' : 'Follow-up'
-                  );
+                  const primaryTag = reply.primaryIntentTag || (reply.smartTags && reply.smartTags[0]);
 
                   return (
                     <div
@@ -612,7 +731,6 @@ export const InboxView: React.FC<InboxViewProps> = ({
                         setAiFollowUp('');
                         setReplyHighlights([]);
                         setMessageAnalysis(null);
-                        // Auto-mark as read when selecting if unread
                         if (!reply.read && onMarkReplyRead) {
                           onMarkReplyRead(reply.id, true);
                         }
@@ -654,9 +772,16 @@ export const InboxView: React.FC<InboxViewProps> = ({
                         {reply.message}
                       </div>
 
-                      <div className="flex justify-between items-center text-[10px] text-slate-400">
+                      {/* Smart Tag and Time Stamp Row */}
+                      <div className="flex justify-between items-center text-[10px] text-slate-400 gap-1">
                         <span>{new Date(reply.receivedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                        {getIntentBadge(currentIntent)}
+                        {primaryTag ? (
+                          renderSmartTagBadge(primaryTag, true)
+                        ) : (
+                          <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-slate-100 text-slate-600 border border-slate-200">
+                            Inbound
+                          </span>
+                        )}
                       </div>
                     </div>
                   );
@@ -665,73 +790,129 @@ export const InboxView: React.FC<InboxViewProps> = ({
             </div>
           </div>
 
-          {/* Right Column: Side-by-Side Original Email vs Proposed AI Draft Window */}
-          <div className="lg:col-span-9 p-6 flex flex-col justify-between space-y-6">
+          {/* Right Column: Thread Header, Smart Tag Inspector, and Side-by-Side Drafting */}
+          <div className="lg:col-span-8 xl:col-span-9 p-6 flex flex-col justify-between space-y-6">
             {selectedReply ? (
               <div className="space-y-6">
-                {/* Thread Header Bar with Read/Unread Controls */}
-                <div className="border-b border-slate-200 pb-4 flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="text-xs font-extrabold text-indigo-600 tracking-wide uppercase">
-                        Client Email Thread
-                      </span>
-                      {getIntentBadge(selectedReply.intent || selectedReply.sentiment)}
-                      
-                      <button
-                        onClick={handleClassifyIntent}
-                        disabled={isClassifying}
-                        className="px-2 py-0.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-[10px] rounded border border-indigo-200 flex items-center gap-1 transition disabled:opacity-50"
-                        title="Run AI Intent Classifier"
-                      >
-                        <Sparkles className={`w-3 h-3 text-indigo-600 ${isClassifying ? 'animate-spin' : ''}`} />
-                        {isClassifying ? 'Classifying...' : 'Re-Classify Intent'}
-                      </button>
-                    </div>
-                    <h2 className="text-lg font-bold text-slate-900">
-                      {selectedReply.subject}
-                    </h2>
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-2 text-xs">
-                    <div className="flex items-center gap-1.5 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200">
-                      <User className="w-3.5 h-3.5 text-slate-400" />
-                      <span className="font-bold text-slate-800">{selectedReply.senderName}</span>
-                      <span className="text-slate-500">({selectedReply.senderEmail})</span>
+                {/* Thread Header Bar with Read/Unread & Smart Tag Badge */}
+                <div className="border-b border-slate-200 pb-4 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <div className="flex items-center gap-2 mb-1 flex-wrap">
+                        <span className="text-xs font-extrabold text-indigo-600 tracking-wide uppercase">
+                          Client Email Thread
+                        </span>
+                        {renderSmartTagBadge(selectedReply.primaryIntentTag || (selectedReply.smartTags && selectedReply.smartTags[0]), true)}
+                        
+                        <button
+                          onClick={handleClassifyIntent}
+                          disabled={isClassifying}
+                          className="px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-[10px] rounded-lg border border-indigo-200 flex items-center gap-1 transition disabled:opacity-50"
+                          title="Re-run deep AI intent classifier"
+                        >
+                          <Sparkles className={`w-3 h-3 text-indigo-600 ${isClassifying ? 'animate-spin' : ''}`} />
+                          {isClassifying ? 'Classifying...' : 'Re-Run Smart Classifier'}
+                        </button>
+                      </div>
+                      <h2 className="text-lg font-bold text-slate-900">
+                        {selectedReply.subject}
+                      </h2>
                     </div>
 
-                    {/* Schedule Meeting Button */}
-                    {onOpenMeetingsTab && (
-                      <button
-                        onClick={onOpenMeetingsTab}
-                        className="px-3 py-1.5 bg-purple-50 hover:bg-purple-100 border border-purple-200 text-purple-800 font-bold text-xs rounded-xl transition flex items-center gap-1.5 shadow-2xs"
-                      >
-                        <Calendar className="w-3.5 h-3.5 text-purple-600" /> Schedule Meeting
-                      </button>
-                    )}
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      <div className="flex items-center gap-1.5 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200">
+                        <User className="w-3.5 h-3.5 text-slate-400" />
+                        <span className="font-bold text-slate-800">{selectedReply.senderName}</span>
+                        <span className="text-slate-500">({selectedReply.senderEmail})</span>
+                      </div>
 
-                    {/* Manual Toggle Read/Unread Button */}
-                    <button
-                      onClick={() => {
-                        const newReadState = !selectedReply.read;
-                        if (onMarkReplyRead) {
-                          onMarkReplyRead(selectedReply.id, newReadState);
-                        }
-                        setSelectedReply((prev) => (prev ? { ...prev, read: newReadState } : null));
-                      }}
-                      className="px-3 py-1.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 font-bold text-xs rounded-xl transition flex items-center gap-1.5 shadow-2xs"
-                    >
-                      {selectedReply.read ? (
-                        <>
-                          <EyeOff className="w-3.5 h-3.5 text-slate-500" /> Mark Unread
-                        </>
-                      ) : (
-                        <>
-                          <Eye className="w-3.5 h-3.5 text-indigo-600" /> Mark Read
-                        </>
+                      {/* Schedule Meeting Button */}
+                      {onOpenMeetingsTab && (
+                        <button
+                          onClick={onOpenMeetingsTab}
+                          className="px-3 py-1.5 bg-purple-50 hover:bg-purple-100 border border-purple-200 text-purple-800 font-bold text-xs rounded-xl transition flex items-center gap-1.5 shadow-2xs"
+                        >
+                          <Calendar className="w-3.5 h-3.5 text-purple-600" /> Schedule Meeting
+                        </button>
                       )}
-                    </button>
+
+                      {/* Manual Toggle Read/Unread Button */}
+                      <button
+                        onClick={() => {
+                          const newReadState = !selectedReply.read;
+                          if (onMarkReplyRead) {
+                            onMarkReplyRead(selectedReply.id, newReadState);
+                          }
+                          setSelectedReply((prev) => (prev ? { ...prev, read: newReadState } : null));
+                        }}
+                        className="px-3 py-1.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 font-bold text-xs rounded-xl transition flex items-center gap-1.5 shadow-2xs"
+                      >
+                        {selectedReply.read ? (
+                          <>
+                            <EyeOff className="w-3.5 h-3.5 text-slate-500" /> Mark Unread
+                          </>
+                        ) : (
+                          <>
+                            <Eye className="w-3.5 h-3.5 text-indigo-600" /> Mark Read
+                          </>
+                        )}
+                      </button>
+                    </div>
                   </div>
+
+                  {/* PROMINENT SMART INTENT CLASSIFIER & RULE TRIGGER CARD */}
+                  {selectedReply.primaryIntentTag && (
+                    <div className="bg-gradient-to-r from-indigo-50/90 via-emerald-50/60 to-slate-50 border border-indigo-200 p-3.5 rounded-2xl space-y-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-indigo-100 pb-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[11px] font-extrabold uppercase tracking-wider text-indigo-950 flex items-center gap-1">
+                            <ShieldCheck className="w-4 h-4 text-indigo-600" /> Smart Intent Classifier:
+                          </span>
+                          <span className="font-extrabold text-xs text-slate-900">
+                            {selectedReply.primaryIntentTag.label}
+                          </span>
+                          <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 text-[10px] font-extrabold border border-emerald-300">
+                            {selectedReply.primaryIntentTag.confidence}% Confidence
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={handleApplySuggestedStrategy}
+                            className="px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-lg transition flex items-center gap-1 shadow-2xs"
+                          >
+                            <Zap className="w-3 h-3 text-amber-300 fill-amber-300" />
+                            Apply Rule Strategy to Draft
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs text-slate-700 pt-1">
+                        <div>
+                          <span className="font-bold text-slate-500 block text-[10px] uppercase">
+                            Triggered Classifier Rule:
+                          </span>
+                          <span className="font-semibold text-slate-900">
+                            {selectedReply.classificationDetails?.ruleName || selectedReply.primaryIntentTag.matchedRule}
+                          </span>
+                          {selectedReply.classificationDetails?.signals && selectedReply.classificationDetails.signals.length > 0 && (
+                            <div className="text-[11px] text-slate-500 mt-0.5">
+                              Signals: <span className="font-mono text-indigo-700 font-semibold">{selectedReply.classificationDetails.signals.join(', ')}</span>
+                            </div>
+                          )}
+                        </div>
+
+                        <div>
+                          <span className="font-bold text-slate-500 block text-[10px] uppercase">
+                            Recommended Action:
+                          </span>
+                          <span className="font-bold text-emerald-900">
+                            💡 {selectedReply.primaryIntentTag.suggestedAction}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {/* PROMINENT REPLIED & HANDLED BANNER IF ALREADY REPLIED */}
@@ -899,154 +1080,95 @@ export const InboxView: React.FC<InboxViewProps> = ({
                         </div>
                       </div>
 
+                      {/* Proof Snippet Quick Injectors */}
+                      <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
+                        <span className="font-bold text-slate-500">Inject Proof:</span>
+                        <button
+                          onClick={() => handleInjectProofSnippet('screenshot')}
+                          className="px-2 py-1 bg-white hover:bg-indigo-50 text-indigo-700 font-bold rounded border border-indigo-200 transition"
+                        >
+                          + Screenshot
+                        </button>
+                        <button
+                          onClick={() => handleInjectProofSnippet('diagram')}
+                          className="px-2 py-1 bg-white hover:bg-indigo-50 text-indigo-700 font-bold rounded border border-indigo-200 transition"
+                        >
+                          + Architecture
+                        </button>
+                        <button
+                          onClick={() => handleInjectProofSnippet('benchmark')}
+                          className="px-2 py-1 bg-white hover:bg-indigo-50 text-indigo-700 font-bold rounded border border-indigo-200 transition"
+                        >
+                          + TTFB Benchmark
+                        </button>
+                      </div>
+
+                      {/* Editable Textarea */}
+                      <textarea
+                        value={aiFollowUp}
+                        onChange={(e) => setAiFollowUp(e.target.value)}
+                        placeholder="Click 'Re-Generate AI Draft' to craft a tailored technical proposal..."
+                        className="w-full h-56 p-4 bg-white border border-indigo-200 rounded-xl text-xs font-mono text-slate-800 leading-relaxed focus:ring-2 focus:ring-indigo-500 focus:outline-none resize-none shadow-xs"
+                      />
+
                       {/* Highlights Badges */}
                       {replyHighlights.length > 0 && (
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          {replyHighlights.map((hl, i) => (
-                            <span
-                              key={i}
-                              className="px-2 py-0.5 rounded text-[10px] font-bold bg-white text-indigo-800 border border-indigo-200"
-                            >
-                              {hl}
+                        <div className="flex flex-wrap gap-1.5 pt-1">
+                          {replyHighlights.map((h, idx) => (
+                            <span key={idx} className="text-[10px] bg-white border border-indigo-200 text-indigo-900 font-bold px-2 py-0.5 rounded shadow-2xs">
+                              {h}
                             </span>
                           ))}
                         </div>
                       )}
-
-                      {/* GoFullPage Screenshot & Proof Attachment Bar */}
-                      <div className="bg-white p-2.5 rounded-xl border border-indigo-200 space-y-2">
-                        <div className="flex items-center justify-between">
-                          <span className="text-[11px] font-bold text-indigo-900 flex items-center gap-1">
-                            <ImageIcon className="w-3.5 h-3.5 text-indigo-600" /> Proof & Screenshot Tools:
-                          </span>
-                          <label className="cursor-pointer text-indigo-600 hover:text-indigo-800 text-[11px] font-bold flex items-center gap-1">
-                            + Attach GoFullPage
-                            <input
-                              type="file"
-                              accept="image/*"
-                              multiple
-                              onChange={handleFileUpload}
-                              className="hidden"
-                            />
-                          </label>
-                        </div>
-
-                        {uploadedScreenshots.length > 0 && (
-                          <div className="flex flex-wrap gap-1.5 pt-1 border-t border-slate-100">
-                            {uploadedScreenshots.map((img) => (
-                              <div
-                                key={img.id}
-                                className="relative border border-slate-200 rounded p-1 bg-slate-50 flex items-center gap-1.5 max-w-[160px]"
-                              >
-                                <img src={img.url} alt={img.name} className="w-6 h-6 object-cover rounded border" />
-                                <span className="text-[9px] font-semibold text-slate-700 truncate flex-1">
-                                  {img.name}
-                                </span>
-                                <button
-                                  onClick={() => removeScreenshot(img.id)}
-                                  className="text-slate-400 hover:text-red-600 text-xs font-bold p-0.5"
-                                >
-                                  ✕
-                                </button>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-
-                        <div className="flex flex-wrap items-center gap-1 pt-1">
-                          <span className="text-[10px] text-slate-400 font-semibold">Snippets:</span>
-                          <button
-                            onClick={() => handleInjectProofSnippet('screenshot')}
-                            className="px-1.5 py-0.5 bg-indigo-50 text-indigo-700 text-[9px] font-bold rounded border border-indigo-200"
-                          >
-                            + Audit Screenshot
-                          </button>
-                          <button
-                            onClick={() => handleInjectProofSnippet('diagram')}
-                            className="px-1.5 py-0.5 bg-purple-50 text-purple-700 text-[9px] font-bold rounded border border-purple-200"
-                          >
-                            + Diagram
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Proposed AI Draft Textarea (Editable by User) */}
-                      <div>
-                        <div className="flex justify-between items-center mb-1">
-                          <label className="block text-[10px] font-bold text-indigo-900 uppercase tracking-wider">
-                            Editable Response Draft:
-                          </label>
-                          {selectedReply.replied && (
-                            <span className="text-[10px] text-amber-700 font-bold bg-amber-100 px-2 py-0.5 rounded">
-                              ⚠️ Already Replied to this thread
-                            </span>
-                          )}
-                        </div>
-                        <textarea
-                          rows={11}
-                          value={aiFollowUp}
-                          onChange={(e) => setAiFollowUp(e.target.value)}
-                          placeholder="Click 'Re-Generate AI Draft' to populate response..."
-                          className="w-full p-3.5 bg-white border border-indigo-200 rounded-xl text-xs text-slate-800 font-mono leading-relaxed focus:ring-2 focus:ring-indigo-500 focus:outline-none shadow-2xs"
-                        />
-                      </div>
                     </div>
 
-                    {/* Approve & Send Toolbar */}
-                    <div className="space-y-2 pt-1 border-t border-indigo-100">
-                      <div className="flex items-center justify-between text-[11px] text-slate-500 font-medium">
-                        <span>Scope: <strong className="text-slate-800">{estimatedTimeline || '3-7 Days'}</strong></span>
-                        <span>Pricing: <strong className="text-indigo-700">{estimatedPricing || '$450 - $1,400'}</strong></span>
-                      </div>
+                    {/* Send / Copy Action Buttons */}
+                    <div className="flex items-center justify-between gap-3 pt-3 border-t border-indigo-100">
+                      <button
+                        onClick={() => {
+                          navigator.clipboard.writeText(aiFollowUp);
+                          setCopiedResponse(true);
+                          setTimeout(() => setCopiedResponse(false), 2000);
+                        }}
+                        disabled={!aiFollowUp}
+                        className="px-3.5 py-2 bg-white hover:bg-slate-50 text-slate-700 font-bold text-xs rounded-xl border border-slate-300 transition flex items-center gap-1.5 shadow-2xs disabled:opacity-40"
+                      >
+                        {copiedResponse ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                        {copiedResponse ? 'Copied!' : 'Copy Draft'}
+                      </button>
 
-                      <div className="flex flex-wrap items-center justify-end gap-2">
-                        <button
-                          onClick={() => {
-                            navigator.clipboard.writeText(aiFollowUp);
-                            setCopiedResponse(true);
-                            setTimeout(() => setCopiedResponse(false), 2000);
-                          }}
-                          className="px-3.5 py-2 bg-white border border-slate-300 text-slate-800 font-bold text-xs rounded-xl hover:bg-slate-50 transition shadow-2xs flex items-center gap-1.5"
-                        >
-                          {copiedResponse ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5 text-slate-600" />}
-                          {copiedResponse ? 'Copied!' : 'Copy Draft'}
-                        </button>
-
-                        <button
-                          onClick={handleInitiateSendReply}
-                          disabled={!aiFollowUp}
-                          className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl shadow-md transition flex items-center gap-2 disabled:opacity-50"
-                        >
-                          <Send className="w-3.5 h-3.5" /> Approve & Send Direct Reply
-                        </button>
-
-                        {activeLead && (
-                          <button
-                            onClick={() => onSelectLeadForEmail(activeLead)}
-                            className="px-3.5 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-xs rounded-xl border border-indigo-200 transition"
-                          >
-                            Full Modal Composer
-                          </button>
-                        )}
-                      </div>
+                      <button
+                        onClick={handleInitiateSendReply}
+                        disabled={!aiFollowUp}
+                        className="px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-bold text-xs rounded-xl shadow-sm transition flex items-center gap-2 disabled:opacity-40"
+                      >
+                        <Send className="w-4 h-4" />
+                        Send Reply via Gmail
+                      </button>
                     </div>
                   </div>
                 </div>
               </div>
             ) : (
-              <div className="h-full flex flex-col items-center justify-center py-16 text-slate-400 text-xs">
-                <Mail className="w-12 h-12 stroke-1 text-slate-300 mb-2" />
-                Select an inbound message from the list to view thread & generate AI technical responses.
+              <div className="h-full flex flex-col items-center justify-center text-center p-12 text-slate-400 space-y-3">
+                <Inbox className="w-12 h-12 text-slate-300" />
+                <div className="space-y-1">
+                  <h3 className="text-base font-bold text-slate-700">Select an Inbound Thread</h3>
+                  <p className="text-xs max-w-sm">
+                    Click any client reply in the left sidebar to inspect automatic intent tags and generate a technical proposal.
+                  </p>
+                </div>
               </div>
             )}
           </div>
         </div>
       )}
 
-      {/* VIEW MODE 2: SENT REPLIES HISTORY LOG */}
+      {/* VIEW MODE 2: SENT REPLIES AUDIT LOG */}
       {activeMainTab === 'sent_log' && (
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
-          <div className="flex justify-between items-center border-b border-slate-200 pb-4">
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-6">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-4">
             <div>
               <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
                 <History className="w-5 h-5 text-indigo-600" /> Sent Email Replies History ({outreachLogs.length})
@@ -1091,6 +1213,152 @@ export const InboxView: React.FC<InboxViewProps> = ({
                 </div>
               ))
             )}
+          </div>
+        </div>
+      )}
+
+      {/* SMART CLASSIFIER RULES ENGINE & LIVE SANDBOX MODAL */}
+      {showRulesModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in">
+          <div className="bg-white rounded-2xl max-w-3xl w-full p-6 shadow-2xl border border-indigo-200 space-y-5 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-slate-200 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="p-2 bg-indigo-100 rounded-xl text-indigo-700">
+                  <Sliders className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900">
+                    Smart Tagging Classifier Rules Engine
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Rule-based heuristic classifier & AI intent detector running on incoming inbox messages.
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowRulesModal(false)}
+                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* LIVE INTENT TESTING SANDBOX */}
+            <div className="bg-indigo-50/70 border border-indigo-200 p-4 rounded-2xl space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-extrabold uppercase tracking-wider text-indigo-950 flex items-center gap-1.5">
+                  <Play className="w-3.5 h-3.5 text-indigo-600" /> Live Intent Classifier Sandbox
+                </span>
+                <span className="text-[10px] font-bold bg-indigo-100 text-indigo-800 px-2 py-0.5 rounded">
+                  Real-time Evaluation
+                </span>
+              </div>
+
+              <div className="space-y-2">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                    Subject Line:
+                  </label>
+                  <input
+                    type="text"
+                    value={sandboxSubject}
+                    onChange={(e) => handleTestSandbox(sandboxMessage, e.target.value)}
+                    className="w-full p-2 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                    Incoming Message Body:
+                  </label>
+                  <textarea
+                    value={sandboxMessage}
+                    onChange={(e) => handleTestSandbox(e.target.value, sandboxSubject)}
+                    rows={3}
+                    className="w-full p-2.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 font-mono focus:outline-none resize-none"
+                  />
+                </div>
+              </div>
+
+              {/* Real-time Sandbox Output */}
+              {sandboxResult && sandboxResult.primaryTag && (
+                <div className="bg-white p-3 rounded-xl border border-indigo-200 space-y-2 text-xs">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-slate-500">Predicted Smart Tag:</span>
+                      {renderSmartTagBadge(sandboxResult.primaryTag, true)}
+                    </div>
+                    <span className="text-[10px] font-bold text-slate-400">
+                      Priority: {sandboxResult.primaryTag.priority}
+                    </span>
+                  </div>
+
+                  <div className="text-[11px] text-slate-600 space-y-1 pt-1 border-t border-slate-100">
+                    <div>
+                      <span className="font-bold text-slate-500">Matched Rule:</span>{' '}
+                      <span className="font-semibold text-slate-800">{sandboxResult.primaryTag.matchedRule}</span>
+                    </div>
+                    <div>
+                      <span className="font-bold text-slate-500">Signals Extracted:</span>{' '}
+                      <span className="font-mono text-indigo-700 font-semibold">
+                        {(sandboxResult.primaryTag.keyPhrasesMatched || []).join(', ') || 'General Context'}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="font-bold text-slate-500">Automated Next Step:</span>{' '}
+                      <span className="font-bold text-emerald-800">
+                        {sandboxResult.primaryTag.suggestedAction}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* ACTIVE RULES LIST */}
+            <div className="space-y-3">
+              <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                <Tag className="w-4 h-4 text-indigo-600" /> Active Classifier Rules ({DEFAULT_CLASSIFIER_RULES.length})
+              </h4>
+
+              <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                {DEFAULT_CLASSIFIER_RULES.map((rule) => (
+                  <div key={rule.id} className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-slate-900">{rule.name}</span>
+                        <span className="text-[10px] font-extrabold px-2 py-0.5 rounded bg-indigo-100 text-indigo-800">
+                          {rule.targetTag}
+                        </span>
+                      </div>
+                      <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                        Active
+                      </span>
+                    </div>
+
+                    <div className="text-[11px] text-slate-500">
+                      <span className="font-semibold text-slate-600">Triggers:</span>{' '}
+                      <span className="font-mono text-[10px] text-slate-700">
+                        {rule.triggerKeywords.slice(0, 8).join(', ')}...
+                      </span>
+                    </div>
+
+                    <div className="text-[11px] text-emerald-800 font-semibold">
+                      Action: {rule.suggestedAction}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-2 border-t border-slate-100">
+              <button
+                onClick={() => setShowRulesModal(false)}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl transition"
+              >
+                Done
+              </button>
+            </div>
           </div>
         </div>
       )}

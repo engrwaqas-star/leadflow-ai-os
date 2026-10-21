@@ -1,0 +1,69 @@
+{
+  "entities": {
+    "Lead": {
+      "title": "Lead",
+      "description": "A prospect business or lead for client acquisition and CRM tracking",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "businessName": { "type": "string", "maxLength": 200 },
+        "website": { "type": "string", "maxLength": 500 },
+        "email": { "type": "string", "maxLength": 254 },
+        "status": { "type": "string", "maxLength": 50 },
+        "temperature": { "type": "string", "maxLength": 20 },
+        "recordStatus": { "type": "string", "maxLength": 30 },
+        "leadScore": { "type": "number" },
+        "ownerId": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "maxLength": 50 },
+        "updatedAt": { "type": "string", "maxLength": 50 }
+      },
+      "required": ["id", "businessName", "ownerId"]
+    },
+    "OutreachLog": {
+      "title": "OutreachLog",
+      "description": "Log of email or message outreach sent to a lead",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "leadId": { "type": "string", "maxLength": 128 },
+        "businessName": { "type": "string", "maxLength": 200 },
+        "recipient": { "type": "string", "maxLength": 254 },
+        "sender": { "type": "string", "maxLength": 254 },
+        "subject": { "type": "string", "maxLength": 300 },
+        "body": { "type": "string", "maxLength": 10000 },
+        "status": { "type": "string", "maxLength": 50 },
+        "timestamp": { "type": "string", "maxLength": 50 },
+        "ownerId": { "type": "string", "maxLength": 128 }
+      },
+      "required": ["id", "leadId", "ownerId"]
+    },
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Freelancer user profile configuration",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 120 },
+        "title": { "type": "string", "maxLength": 120 },
+        "email": { "type": "string", "maxLength": 254 },
+        "dailyOutreachGoal": { "type": "number" },
+        "ownerId": { "type": "string", "maxLength": 128 }
+      },
+      "required": ["id", "email", "ownerId"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/leads/{leadId}": {
+      "schema": { "$ref": "#/entities/Lead" },
+      "description": "User's pipeline and CRM leads"
+    },
+    "/users/{userId}/outreach/{logId}": {
+      "schema": { "$ref": "#/entities/OutreachLog" },
+      "description": "User's outreach dispatch logs"
+    },
+    "/users/{userId}/profile/{profileId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "User profile settings"
+    }
+  }
+}

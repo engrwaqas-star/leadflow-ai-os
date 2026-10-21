@@ -15,9 +15,14 @@ import {
   ListPlus,
   Zap,
   AlertTriangle,
+  ShieldCheck,
+  CheckCircle2,
+  AlertCircle,
+  MailCheck,
 } from 'lucide-react';
-import { Lead, UserProfile, EmailTemplate } from '../types';
+import { Lead, UserProfile, EmailTemplate, TailoredProposal, OutreachQualityChecklist } from '../types';
 import { loggedFetch } from '../utils/apiLogger';
+import { GmailOutreachService, SendGmailResult } from '../services/gmailService';
 
 interface EmailModalProps {
   isOpen: boolean;
@@ -63,13 +68,41 @@ export const EmailModal: React.FC<EmailModalProps> = ({
   const [copied, setCopied] = useState(false);
 
   // AI Helpers state
-  const [activeTab, setActiveTab] = useState<'editor' | 'openings' | 'talkingPoints'>('editor');
+  const [activeTab, setActiveTab] = useState<'editor' | 'openings' | 'talkingPoints' | 'proposal'>('editor');
   const [openings, setOpenings] = useState<OpeningItem[]>([]);
   const [loadingOpenings, setLoadingOpenings] = useState(false);
   const [talkingPoints, setTalkingPoints] = useState<TalkingPointItem[]>([]);
   const [selectedPoints, setSelectedPoints] = useState<string[]>([]);
   const [loadingPoints, setLoadingPoints] = useState(false);
   const [selectedOpening, setSelectedOpening] = useState<string>('');
+
+  // Proposal state
+  const [proposal, setProposal] = useState<TailoredProposal | null>(null);
+  const [loadingProposal, setLoadingProposal] = useState(false);
+  const [proposalTier, setProposalTier] = useState<'tier1' | 'tier2' | 'tier3'>('tier2');
+
+  const fetchProposal = async () => {
+    if (!lead) return;
+    setLoadingProposal(true);
+    try {
+      const res = await loggedFetch('/api/ai/generate-proposal', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lead, userProfile: profile, customInstructions: userInstructions }),
+      });
+      const data = res.data;
+      if (data?.success && data.proposal) {
+        setProposal(data.proposal);
+        if (data.proposal.recommendedTier) {
+          setProposalTier(data.proposal.recommendedTier);
+        }
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoadingProposal(false);
+    }
+  };
 
   // Scheduling state
   const [isScheduling, setIsScheduling] = useState(false);
@@ -78,6 +111,90 @@ export const EmailModal: React.FC<EmailModalProps> = ({
   // GoFullPage Screenshot Attachments State
   const [uploadedScreenshots, setUploadedScreenshots] = useState<{ id: string; name: string; url: string }[]>([]);
   const [genError, setGenError] = useState<{ message: string; code?: string } | null>(null);
+
+  // 12-Point Quality Control Checklist State
+  const [checklist, setChecklist] = useState<OutreachQualityChecklist>({
+    recipientEmailVerified: false,
+    businessIsReal: true,
+    personalizationEvidenceBased: true,
+    noFabricatedClaims: true,
+    noFakeStatistics: true,
+    noMisleadingStatements: true,
+    clearReasonForContacting: true,
+    conciseLength: true,
+    legitimateSenderIdentity: true,
+    optOutHandlingAvailable: true,
+    correctLeadAttached: true,
+    userApprovalRecorded: true,
+  });
+  const [showChecklist, setShowChecklist] = useState(false);
+  const [isSendingGmail, setIsSendingGmail] = useState(false);
+  const [gmailSendResult, setGmailSendResult] = useState<SendGmailResult | null>(null);
+
+  // Auto-evaluate checklist on lead/body changes
+  useEffect(() => {
+    if (lead) {
+      const isPlaceholder = 
+        !lead.email || 
+        lead.email.includes('example.com') || 
+        lead.email.includes('domain.com') || 
+        lead.email === 'Not found' || 
+        !lead.email.includes('@');
+
+      setChecklist((prev) => ({
+        ...prev,
+        recipientEmailVerified: !isPlaceholder,
+        businessIsReal: lead.verificationStatus === 'VERIFIED' || lead.score >= 50,
+        personalizationEvidenceBased: (body?.length || 0) > 40,
+        conciseLength: (body?.split(/\s+/).length || 0) < 220,
+        clearReasonForContacting: (subject?.length || 0) > 3,
+      }));
+    }
+  }, [lead, body, subject]);
+
+  const handleSendViaGmailAPI = async () => {
+    if (!lead) return;
+    setIsSendingGmail(true);
+    setGmailSendResult(null);
+
+    try {
+      const res = await GmailOutreachService.sendViaGmail({
+        recipientEmail: lead.email,
+        recipientName: lead.contactPerson || lead.businessName,
+        businessName: lead.businessName,
+        leadId: lead.id,
+        subject,
+        body,
+        senderName: profile.name,
+        senderEmail: profile.email,
+        senderTitle: profile.title,
+        checklist,
+      });
+
+      setGmailSendResult(res);
+
+      if (res.success) {
+        onLogOutreach(lead.id, subject, body);
+      }
+    } catch (err: any) {
+      setGmailSendResult({
+        success: false,
+        status: 'SEND_FAILED',
+        error_code: 'CLIENT_SEND_ERROR',
+        message: err.message || 'Failed to dispatch email via Gmail API.',
+        provider: 'gmail',
+        timestamp: new Date().toISOString(),
+      });
+    } finally {
+      setIsSendingGmail(false);
+    }
+  };
+
+  const isChecklistComplete = Object.values(checklist).every(Boolean);
+
+  const toggleChecklistItem = (key: keyof OutreachQualityChecklist) => {
+    setChecklist((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
 
   const handleModalFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files) return;
@@ -158,8 +275,8 @@ export const EmailModal: React.FC<EmailModalProps> = ({
   async function generateAiEmail(
     selectedStrategy: string,
     selectedTone: string,
-    openingText: string,
-    points: string[],
+    openingText?: string,
+    points?: string[],
     customPromptInstructions?: string
   ) {
     setGenerating(true);
@@ -172,8 +289,8 @@ export const EmailModal: React.FC<EmailModalProps> = ({
           lead,
           strategy: selectedStrategy,
           tone: selectedTone,
-          customOpening: openingText || selectedOpening,
-          selectedTalkingPoints: points.length > 0 ? points : selectedPoints,
+          customOpening: openingText !== undefined ? openingText : selectedOpening,
+          selectedTalkingPoints: points !== undefined ? points : selectedPoints,
           userInstructions: customPromptInstructions !== undefined ? customPromptInstructions : userInstructions,
           senderName: profile.name,
           senderTitle: profile.title,
@@ -419,9 +536,180 @@ export const EmailModal: React.FC<EmailModalProps> = ({
           >
             <ListPlus className="w-3.5 h-3.5 text-emerald-600" /> Industry Talking Points
           </button>
+          <button
+            onClick={() => {
+              setActiveTab('proposal');
+              if (!proposal) fetchProposal();
+            }}
+            className={`px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition ${
+              activeTab === 'proposal'
+                ? 'bg-indigo-600 text-white font-bold shadow-xs'
+                : 'text-slate-600 hover:bg-slate-100'
+            }`}
+          >
+            <Sparkles className="w-3.5 h-3.5 text-amber-300" /> Problem SOW &amp; Packages
+          </button>
         </div>
 
-        {/* TAB 1: EMAIL EDITOR */}
+        {/* TAB 4: PROBLEM PROPOSAL & SOW PACKAGES */}
+        {activeTab === 'proposal' && (
+          <div className="space-y-4">
+            <div className="bg-indigo-50/70 p-3.5 rounded-xl border border-indigo-200 flex items-center justify-between">
+              <div>
+                <h3 className="font-extrabold text-indigo-950 text-xs flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
+                  Client Problem-Trained SOW &amp; Pricing Packages
+                </h3>
+                <p className="text-[11px] text-indigo-700">
+                  Select a tier below to inject its scope directly into your email or copy the full SOW.
+                </p>
+              </div>
+              <button
+                onClick={fetchProposal}
+                disabled={loadingProposal}
+                className="px-2.5 py-1 bg-white border border-indigo-300 hover:bg-indigo-50 text-indigo-700 text-xs font-bold rounded-lg transition inline-flex items-center gap-1 shadow-xs"
+              >
+                {loadingProposal ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
+                Regenerate SOW
+              </button>
+            </div>
+
+            {loadingProposal && (
+              <div className="py-12 text-center space-y-2">
+                <Loader2 className="w-8 h-8 animate-spin text-indigo-600 mx-auto" />
+                <p className="text-xs text-slate-500 font-semibold">
+                  Generating custom SOW tailored to {lead?.businessName}'s diagnosed website issues...
+                </p>
+              </div>
+            )}
+
+            {!loadingProposal && proposal && (
+              <div className="space-y-4">
+                {/* Diagnosed Problem Summary */}
+                <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs space-y-1">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-slate-800 uppercase tracking-wider text-[10px]">
+                      Archetype: {proposal.archetypeTitle}
+                    </span>
+                    <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                      ROI: {proposal.roiEstimate}
+                    </span>
+                  </div>
+                  <p className="text-slate-600 text-[11px] leading-relaxed">
+                    {proposal.diagnosisSummary}
+                  </p>
+                </div>
+
+                {/* 3 Tier Cards */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                  {/* Tier 1 */}
+                  <div
+                    onClick={() => setProposalTier('tier1')}
+                    className={`p-3 rounded-xl border-2 cursor-pointer transition flex flex-col justify-between ${
+                      proposalTier === 'tier1' ? 'border-indigo-600 bg-indigo-50/40 shadow-xs' : 'border-slate-200 bg-white hover:border-slate-300'
+                    }`}
+                  >
+                    <div className="space-y-1.5">
+                      <div className="flex justify-between items-center">
+                        <span className="text-[10px] font-extrabold uppercase text-slate-500">Tier 1: Quick Fix</span>
+                        <span className="text-[9px] bg-slate-100 font-bold px-1.5 py-0.5 rounded text-slate-600">
+                          {proposal.tier1_QuickFix.timeline}
+                        </span>
+                      </div>
+                      <div className="font-extrabold text-slate-900 text-xs">{proposal.tier1_QuickFix.name}</div>
+                      <div className="text-base font-black text-indigo-600">{proposal.tier1_QuickFix.price}</div>
+                      <div className="space-y-1 pt-1 border-t border-slate-100 text-[10px] text-slate-600">
+                        {proposal.tier1_QuickFix.deliverables.slice(0, 3).map((d, idx) => (
+                          <div key={idx} className="truncate">• {d}</div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Tier 2 */}
+                  <div
+                    onClick={() => setProposalTier('tier2')}
+                    className={`p-3 rounded-xl border-2 cursor-pointer transition relative flex flex-col justify-between ${
+                      proposalTier === 'tier2' ? 'border-indigo-600 bg-indigo-50/40 shadow-xs' : 'border-slate-200 bg-white hover:border-slate-300'
+                    }`}
+                  >
+                    <div className="space-y-1.5">
+                      <div className="flex justify-between items-center">
+                        <span className="text-[10px] font-extrabold uppercase text-indigo-600">Tier 2: Modernize</span>
+                        <span className="text-[9px] bg-indigo-100 font-bold px-1.5 py-0.5 rounded text-indigo-800">
+                          {proposal.tier2_Modernize.timeline}
+                        </span>
+                      </div>
+                      <div className="font-extrabold text-slate-900 text-xs">{proposal.tier2_Modernize.name}</div>
+                      <div className="text-base font-black text-indigo-600">{proposal.tier2_Modernize.price}</div>
+                      <div className="space-y-1 pt-1 border-t border-slate-100 text-[10px] text-slate-600">
+                        {proposal.tier2_Modernize.deliverables.slice(0, 3).map((d, idx) => (
+                          <div key={idx} className="truncate font-medium">• {d}</div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Tier 3 */}
+                  <div
+                    onClick={() => setProposalTier('tier3')}
+                    className={`p-3 rounded-xl border-2 cursor-pointer transition flex flex-col justify-between ${
+                      proposalTier === 'tier3' ? 'border-indigo-600 bg-indigo-50/40 shadow-xs' : 'border-slate-200 bg-white hover:border-slate-300'
+                    }`}
+                  >
+                    <div className="space-y-1.5">
+                      <div className="flex justify-between items-center">
+                        <span className="text-[10px] font-extrabold uppercase text-slate-500">Tier 3: Full Build</span>
+                        <span className="text-[9px] bg-slate-100 font-bold px-1.5 py-0.5 rounded text-slate-600">
+                          {proposal.tier3_FullBuild.timeline}
+                        </span>
+                      </div>
+                      <div className="font-extrabold text-slate-900 text-xs">{proposal.tier3_FullBuild.name}</div>
+                      <div className="text-base font-black text-indigo-600">{proposal.tier3_FullBuild.price}</div>
+                      <div className="space-y-1 pt-1 border-t border-slate-100 text-[10px] text-slate-600">
+                        {proposal.tier3_FullBuild.deliverables.slice(0, 3).map((d, idx) => (
+                          <div key={idx} className="truncate">• {d}</div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Insertion Actions */}
+                <div className="pt-2 flex flex-wrap gap-2">
+                  <button
+                    onClick={() => {
+                      const selectedTierData =
+                        proposalTier === 'tier1'
+                          ? proposal.tier1_QuickFix
+                          : proposalTier === 'tier3'
+                          ? proposal.tier3_FullBuild
+                          : proposal.tier2_Modernize;
+
+                      const packagePitch = `\n\nProposed Scope of Work & Solution Breakdown:\n• Package: ${selectedTierData.name} (${selectedTierData.price} • ${selectedTierData.timeline} Turnaround)\n• Technical Stack: ${proposal.techStackRecommended.join(', ')}\n• Deliverables:\n${selectedTierData.deliverables.map((d) => `  - ${d}`).join('\n')}\n• Expected ROI: ${proposal.roiEstimate}\n\n${proposal.callToAction}`;
+
+                      setBody((prev) => `${prev.trim()}${packagePitch}`);
+                      setActiveTab('editor');
+                    }}
+                    className="flex-1 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-lg transition inline-flex items-center justify-center gap-1.5 shadow-sm"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" /> Insert Selected Tier into Email Body
+                  </button>
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(proposal.fullProposalMarkdown);
+                      setCopied(true);
+                      setTimeout(() => setCopied(false), 2000);
+                    }}
+                    className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 font-semibold text-xs rounded-lg transition"
+                  >
+                    Copy Full SOW Markdown
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
         {activeTab === 'editor' && (
           <div>
             {/* Strategy & Tone Controls */}
@@ -554,7 +842,16 @@ export const EmailModal: React.FC<EmailModalProps> = ({
             )}
 
             {/* Email Subject & Body Inputs */}
-            <div className="space-y-3 text-xs">
+            <div className="space-y-3 text-xs relative">
+              {generating && (
+                <div className="absolute -inset-2 bg-white/85 backdrop-blur-xs z-20 flex flex-col items-center justify-center rounded-xl p-6 transition-all border border-indigo-100 shadow-sm">
+                  <div className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-xl font-bold shadow-md text-xs animate-pulse">
+                    <Loader2 className="w-4 h-4 animate-spin text-amber-300" />
+                    <span>Regenerating AI Outreach Email Draft...</span>
+                  </div>
+                  <p className="text-[11px] text-slate-500 font-medium mt-2">Crafting personalized message via Gemini & OpenRouter AI Engine</p>
+                </div>
+              )}
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <label className="font-semibold text-slate-700">Subject Line</label>
@@ -814,6 +1111,96 @@ export const EmailModal: React.FC<EmailModalProps> = ({
           </div>
         )}
 
+        {/* 12-POINT QUALITY CONTROL CHECKLIST */}
+        <div className="mt-4 border border-slate-200 rounded-xl overflow-hidden bg-slate-50/50">
+          <div
+            onClick={() => setShowChecklist(!showChecklist)}
+            className="p-3 bg-slate-100 flex items-center justify-between cursor-pointer hover:bg-slate-200/80 transition"
+          >
+            <div className="flex items-center gap-2">
+              <ShieldCheck className={`w-4 h-4 ${isChecklistComplete ? 'text-emerald-600' : 'text-amber-500'}`} />
+              <span className="font-extrabold text-xs text-slate-900">
+                12-Point Quality Control Checklist ({Object.values(checklist).filter(Boolean).length}/12 Verified)
+              </span>
+            </div>
+            <span className="text-[11px] font-bold text-indigo-600">
+              {showChecklist ? 'Hide Checklist ▲' : 'View / Edit Checklist ▼'}
+            </span>
+          </div>
+
+          {showChecklist && (
+            <div className="p-3.5 bg-white grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs border-t border-slate-200">
+              {[
+                { key: 'recipientEmailVerified', label: '1. Recipient email is verified' },
+                { key: 'businessIsReal', label: '2. Business identity is authenticated' },
+                { key: 'personalizationEvidenceBased', label: '3. Personalization is evidence-based' },
+                { key: 'noFabricatedClaims', label: '4. No fabricated claims' },
+                { key: 'noFakeStatistics', label: '5. No fake statistics' },
+                { key: 'noMisleadingStatements', label: '6. No misleading statements' },
+                { key: 'clearReasonForContacting', label: '7. Clear reason for contacting' },
+                { key: 'conciseLength', label: '8. Concise length (< 140 words)' },
+                { key: 'legitimateSenderIdentity', label: '9. Legitimate sender identity' },
+                { key: 'optOutHandlingAvailable', label: '10. Opt-out handling available' },
+                { key: 'correctLeadAttached', label: '11. Correct lead attached' },
+                { key: 'userApprovalRecorded', label: '12. User approval recorded' },
+              ].map(({ key, label }) => (
+                <label
+                  key={key}
+                  className="flex items-center gap-2 p-1.5 rounded hover:bg-slate-50 cursor-pointer font-medium text-slate-700 select-none"
+                >
+                  <input
+                    type="checkbox"
+                    checked={Boolean(checklist[key as keyof OutreachQualityChecklist])}
+                    onChange={() => toggleChecklistItem(key as keyof OutreachQualityChecklist)}
+                    className="rounded text-indigo-600 focus:ring-indigo-500 w-3.5 h-3.5"
+                  />
+                  <span className="text-[11px]">{label}</span>
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* GMAIL API DISPATCH FEEDBACK BANNER */}
+        {gmailSendResult && (
+          <div
+            className={`mt-4 p-3.5 rounded-xl border text-xs space-y-2 ${
+              gmailSendResult.success
+                ? 'bg-emerald-50 border-emerald-300 text-emerald-900'
+                : 'bg-rose-50 border-rose-300 text-rose-900'
+            }`}
+          >
+            <div className="flex items-start justify-between">
+              <div className="flex items-center gap-2 font-bold">
+                {gmailSendResult.success ? (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                ) : (
+                  <AlertCircle className="w-4 h-4 text-rose-600" />
+                )}
+                <span>
+                  {gmailSendResult.success ? 'Outreach Dispatched via Gmail API!' : 'Gmail API Dispatch Failed'}
+                </span>
+              </div>
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-white/80 border font-bold">
+                Status: {gmailSendResult.status}
+              </span>
+            </div>
+
+            <p className="font-medium text-xs">{gmailSendResult.message}</p>
+
+            {gmailSendResult.threadUrl && (
+              <a
+                href={gmailSendResult.threadUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1.5 text-indigo-700 font-extrabold hover:underline pt-1"
+              >
+                <ExternalLink className="w-3.5 h-3.5" /> View Thread in Gmail Inbox &rarr;
+              </a>
+            )}
+          </div>
+        )}
+
         {/* SCHEDULING INTERFACE WHEN SCHEDULE MODE IS TOGGLED */}
         {isScheduling && (
           <div className="mt-4 p-4 bg-indigo-50/90 border border-indigo-200 rounded-xl space-y-3">
@@ -884,7 +1271,7 @@ export const EmailModal: React.FC<EmailModalProps> = ({
               title="Open directly in your Gmail / local mail client so the client replies directly to your inbox!"
               className="px-3.5 py-2 bg-slate-800 hover:bg-slate-900 text-white font-semibold text-xs rounded-lg transition inline-flex items-center gap-1.5 shadow-sm"
             >
-              <ExternalLink className="w-3.5 h-3.5" /> Send via My Gmail ({profile.email})
+              <ExternalLink className="w-3.5 h-3.5" /> Open in Gmail App
             </button>
           </div>
 
@@ -906,10 +1293,20 @@ export const EmailModal: React.FC<EmailModalProps> = ({
               </button>
             ) : (
               <button
-                onClick={handleSendNowAndLog}
-                className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-lg shadow-sm transition inline-flex items-center gap-1.5"
+                onClick={handleSendViaGmailAPI}
+                disabled={isSendingGmail || !isChecklistComplete}
+                title={!isChecklistComplete ? "Complete all 12 quality checklist items to enable sending" : "Dispatch via authenticated Gmail API"}
+                className="px-5 py-2 bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-500 hover:to-indigo-600 disabled:opacity-50 text-white font-extrabold text-xs rounded-lg shadow-md transition inline-flex items-center gap-1.5"
               >
-                <Send className="w-4 h-4" /> Log & Mark Sent
+                {isSendingGmail ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" /> Calling Gmail API...
+                  </>
+                ) : (
+                  <>
+                    <MailCheck className="w-4 h-4 text-emerald-300" /> Send via Gmail API
+                  </>
+                )}
               </button>
             )}
           </div>

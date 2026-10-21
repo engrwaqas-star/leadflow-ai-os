@@ -1,29 +1,17 @@
-import express from "express";
-import path from "path";
-import { createServer as createViteServer } from "vite";
-import { app } from "./src/server-app.js";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
-async function startServer() {
-  const PORT = 3000;
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-  // Vite middleware for development vs static serve in production
-  if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), "dist");
-    app.use(express.static(distPath));
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
-    });
-  }
+const bundledServerPath = path.resolve(__dirname, "dist", "server.cjs");
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`LeadFlow AI OS Server running on http://localhost:${PORT}`);
-  });
+// In production / deployment, execute the pre-bundled dist/server.cjs if present
+if (fs.existsSync(bundledServerPath) && process.env.VITE_DEV !== "true") {
+  await import(pathToFileURL(bundledServerPath).href);
+} else {
+  // In development, load src/server.ts via tsx with Vite middleware
+  process.env.VITE_DEV = "true";
+  await import("./src/server.ts");
 }
-
-startServer();

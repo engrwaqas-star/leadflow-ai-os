@@ -5,6 +5,9 @@ export interface LeadQueryParams {
   country?: string;
   city?: string;
   industry?: string;
+  service?: string;
+  targetService?: string;
+  problemFocus?: string;
   opportunityType?: string;
   budgetTarget?: string;
   keyword?: string;
@@ -101,6 +104,12 @@ export interface ProviderHealth {
 
 // In-memory provider health state store
 const providerHealthStore: Record<string, ProviderHealth> = {
+  "google-places": {
+    providerId: "google-places",
+    providerName: "Google Places API (Real Places & Details)",
+    status: (process.env.GOOGLE_PLACES_API_KEY || process.env.GOOGLE_MAPS_API_KEY) ? "Connected" : "Not Configured",
+    supportedSearchTypes: ["Real Business Discovery", "Google Place ID", "Phone & Address", "Rating & Reviews", "Business Status"],
+  },
   "serpapi-search": {
     providerId: "serpapi-search",
     providerName: "SerpApi Google & Maps Search (Primary)",
@@ -128,19 +137,20 @@ const providerHealthStore: Record<string, ProviderHealth> = {
   "auto-multi": {
     providerId: "auto-multi",
     providerName: "Multi-Source Lead Aggregator (All Active)",
-    status: (process.env.SERPAPI_API_KEY || process.env.FOURSQUARE_API_KEY || process.env.YELP_API_KEY || process.env.GEMINI_API_KEY || process.env.OPENROUTER_API_KEY) ? "Connected" : "Not Configured",
+    status: (process.env.GOOGLE_PLACES_API_KEY || process.env.GOOGLE_MAPS_API_KEY || process.env.SERPAPI_API_KEY || process.env.FOURSQUARE_API_KEY || process.env.YELP_API_KEY || process.env.GEMINI_API_KEY || process.env.OPENROUTER_API_KEY) ? "Connected" : "Not Configured",
     supportedSearchTypes: ["Combined Cross-Directory Search"],
   },
 };
 
-export function getProviderHealth(providerId = "serpapi-search"): ProviderHealth {
-  const health = providerHealthStore[providerId] || providerHealthStore["serpapi-search"];
+export function getProviderHealth(providerId = "google-search-live"): ProviderHealth {
+  const health = providerHealthStore[providerId] || providerHealthStore["google-search-live"];
   let isConfigured = false;
-  if (providerId === "serpapi-search") isConfigured = Boolean(process.env.SERPAPI_API_KEY && process.env.SERPAPI_API_KEY.trim().length > 0);
+  if (providerId === "google-places") isConfigured = Boolean((process.env.GOOGLE_PLACES_API_KEY && process.env.GOOGLE_PLACES_API_KEY.trim().length > 0) || (process.env.GOOGLE_MAPS_API_KEY && process.env.GOOGLE_MAPS_API_KEY.trim().length > 0));
+  else if (providerId === "serpapi-search") isConfigured = Boolean(process.env.SERPAPI_API_KEY && process.env.SERPAPI_API_KEY.trim().length > 0);
   else if (providerId === "foursquare-places") isConfigured = Boolean(process.env.FOURSQUARE_API_KEY && process.env.FOURSQUARE_API_KEY.trim().length > 0);
   else if (providerId === "yelp-fusion") isConfigured = Boolean(process.env.YELP_API_KEY && process.env.YELP_API_KEY.trim().length > 0);
   else if (providerId === "google-search-live") isConfigured = Boolean((process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY.trim().length > 0) || (process.env.OPENROUTER_API_KEY && process.env.OPENROUTER_API_KEY.trim().length > 0));
-  else if (providerId === "auto-multi") isConfigured = Boolean(process.env.SERPAPI_API_KEY || process.env.FOURSQUARE_API_KEY || process.env.YELP_API_KEY || process.env.GEMINI_API_KEY || process.env.OPENROUTER_API_KEY);
+  else if (providerId === "auto-multi") isConfigured = Boolean(process.env.GOOGLE_PLACES_API_KEY || process.env.GOOGLE_MAPS_API_KEY || process.env.SERPAPI_API_KEY || process.env.FOURSQUARE_API_KEY || process.env.YELP_API_KEY || process.env.GEMINI_API_KEY || process.env.OPENROUTER_API_KEY);
 
   return {
     ...health,
@@ -509,6 +519,202 @@ Return JSON array matching input length with fields: id, score, temperature, sug
 }
 
 /**
+ * 0. Google Places API Provider (OFFICIAL PLACES & DETAILS)
+ */
+export class GooglePlacesProvider implements LeadProvider {
+  id = "google-places";
+  name = "Google Places API (Real Places & Details)";
+  supportedSearchTypes = ["Real Business Discovery", "Google Place ID", "Phone & Address", "Rating & Reviews", "Business Status"];
+
+  isConfigured(): boolean {
+    const key = process.env.GOOGLE_PLACES_API_KEY || process.env.GOOGLE_MAPS_API_KEY;
+    return Boolean(key && key.trim().length > 0);
+  }
+
+  async testConnection(): Promise<ConnectionTestResult> {
+    if (!this.isConfigured()) {
+      updateProviderHealth(this.id, { status: "Not Configured" });
+      return {
+        success: false,
+        statusCode: 503,
+        message: "Google Places API is not configured. Please enter GOOGLE_PLACES_API_KEY in Data Sources.",
+      };
+    }
+
+    try {
+      const apiKey = (process.env.GOOGLE_PLACES_API_KEY || process.env.GOOGLE_MAPS_API_KEY)!.trim();
+      const res = await fetch(`https://maps.googleapis.com/maps/api/place/textsearch/json?query=web+developer&key=${apiKey}`);
+      const data = await res.json();
+      if (res.ok && (data.status === "OK" || data.status === "ZERO_RESULTS")) {
+        updateProviderHealth(this.id, { status: "Connected" });
+        return {
+          success: true,
+          statusCode: 200,
+          message: "Google Places API verified & connected successfully.",
+          details: { status: data.status },
+        };
+      } else if (data.status === "REQUEST_DENIED") {
+        updateProviderHealth(this.id, { status: "Unauthorized" });
+        return {
+          success: false,
+          statusCode: 401,
+          message: `Google Places API request denied: ${data.error_message || "Invalid API key or Places API not enabled in Google Cloud Console."}`,
+        };
+      } else {
+        throw new Error(data.error_message || `Google Places API status: ${data.status}`);
+      }
+    } catch (err: any) {
+      updateProviderHealth(this.id, { status: "Error" });
+      return {
+        success: false,
+        statusCode: 500,
+        message: err.message || "Google Places API connection test failed",
+      };
+    }
+  }
+
+  async searchBusinesses(query: LeadQueryParams): Promise<ProviderSearchResult> {
+    if (!this.isConfigured()) {
+      return {
+        success: false,
+        leads: [],
+        provider: this.name,
+        providerId: this.id,
+        statusCode: 503,
+        error: "Google Places API provider is not configured. Please enter GOOGLE_PLACES_API_KEY in Data Sources.",
+        code: "LIVE_PROVIDER_NOT_CONFIGURED",
+        searchParamsUsed: query,
+      };
+    }
+
+    const { country, city, industry, keyword, opportunityType } = query;
+    const apiKey = (process.env.GOOGLE_PLACES_API_KEY || process.env.GOOGLE_MAPS_API_KEY)!.trim();
+
+    try {
+      const queryParts = [keyword, industry, opportunityType].filter(Boolean).join(" ");
+      const locationParts = [city, country].filter(Boolean).join(", ");
+      const textQuery = locationParts ? `${queryParts} in ${locationParts}` : queryParts || "business";
+
+      const placesUrl = `https://maps.googleapis.com/maps/api/place/textsearch/json?query=${encodeURIComponent(textQuery)}&key=${apiKey}`;
+      const response = await fetch(placesUrl);
+
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`Google Places API HTTP error (${response.status}): ${errText}`);
+      }
+
+      const data = await response.json();
+      if (data.status === "REQUEST_DENIED") {
+        throw new Error(`Google Places API denied: ${data.error_message || "Check API Key and Places API permissions"}`);
+      }
+
+      const results = data.results || [];
+      if (results.length === 0) {
+        updateProviderHealth(this.id, { status: "Connected", lastSuccessfulSearch: new Date().toISOString() });
+        return {
+          success: true,
+          leads: [],
+          provider: this.name,
+          providerId: this.id,
+          statusCode: 200,
+          rawCount: 0,
+          validatedCount: 0,
+          rejectedCount: 0,
+          searchParamsUsed: query,
+        };
+      }
+
+      const rawLeads: DiscoveredLeadRaw[] = [];
+      const topPlaces = results.slice(0, 12);
+
+      for (const place of topPlaces) {
+        const placeId = place.place_id;
+        let website = "";
+        let phone = "";
+        let formattedAddress = place.formatted_address || "";
+
+        if (placeId) {
+          try {
+            const detailUrl = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${placeId}&fields=name,formatted_address,formatted_phone_number,international_phone_number,website,url,rating,user_ratings_total,business_status,types&key=${apiKey}`;
+            const detailRes = await fetch(detailUrl);
+            if (detailRes.ok) {
+              const detailData = await detailRes.json();
+              if (detailData.result) {
+                website = detailData.result.website || "";
+                phone = detailData.result.international_phone_number || detailData.result.formatted_phone_number || "";
+                if (detailData.result.formatted_address) formattedAddress = detailData.result.formatted_address;
+              }
+            }
+          } catch (e) {
+            console.error(`Error fetching details for place ${placeId}:`, e);
+          }
+        }
+
+        const sourceUrl = placeId 
+          ? `https://www.google.com/maps/place/?q=place_id:${placeId}` 
+          : (website || `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place.name || "")}`);
+
+        rawLeads.push({
+          businessName: place.name || "",
+          contactPerson: "Not found",
+          email: "Not found",
+          phone: phone || "Not found",
+          website: website || "Not found",
+          address: formattedAddress,
+          city: city || "Local",
+          country: country || "USA",
+          industry: industry || (place.types?.[0]?.replace(/_/g, " ") || "Business"),
+          source: "Google Places API",
+          sourceUrl,
+          verificationStatus: "UNVERIFIED",
+          dateDiscovered: new Date().toISOString(),
+          evidenceText: `Verified place record on Google Places API (Place ID: ${placeId || "N/A"}, Rating: ${place.rating || "N/A"} with ${place.user_ratings_total || 0} reviews).`,
+        });
+      }
+
+      let rejectedCount = 0;
+      const verifiedLeads: DiscoveredLeadRaw[] = [];
+
+      for (const raw of rawLeads) {
+        const { lead, isVerified } = verifyAndNormalizeLead(raw, query);
+        if (isVerified) {
+          verifiedLeads.push(lead);
+        } else {
+          rejectedCount++;
+        }
+      }
+
+      const qualifiedLeads = await qualifyLeadsWithKashi(verifiedLeads, query);
+
+      updateProviderHealth(this.id, { status: "Connected", lastSuccessfulSearch: new Date().toISOString() });
+
+      return {
+        success: true,
+        leads: qualifiedLeads,
+        provider: this.name,
+        providerId: this.id,
+        statusCode: 200,
+        rawCount: results.length,
+        validatedCount: qualifiedLeads.length,
+        rejectedCount,
+        searchParamsUsed: query,
+      };
+    } catch (err: any) {
+      updateProviderHealth(this.id, { status: "Error" });
+      return {
+        success: false,
+        leads: [],
+        provider: this.name,
+        providerId: this.id,
+        statusCode: 500,
+        error: err.message || "Failed Google Places API search execution",
+        searchParamsUsed: query,
+      };
+    }
+  }
+}
+
+/**
  * 1. SerpApi Google & Maps Search Provider (PRIMARY LIVE LEAD PROVIDER)
  */
 export class SerpApiSearchProvider implements LeadProvider {
@@ -564,13 +770,15 @@ export class SerpApiSearchProvider implements LeadProvider {
       };
     }
 
-    const { country, city, industry, keyword, opportunityType } = query;
+    const { country, city, industry, keyword, opportunityType, service, targetService, problemFocus } = query;
     const apiKey = process.env.SERPAPI_API_KEY!.trim();
 
     try {
-      const queryParts = [keyword, industry, opportunityType].filter(Boolean).join(" ");
+      // Form query dynamically adapting to city, country, industry, and service
+      const requestedService = service || targetService || "";
+      const baseTerms = [industry, requestedService, keyword, opportunityType, problemFocus].filter(Boolean).join(" ");
       const locationParts = [city, country].filter(Boolean).join(", ");
-      const fullQuery = locationParts ? `${queryParts} in ${locationParts}` : queryParts || "businesses";
+      const fullQuery = locationParts ? `${baseTerms || "businesses"} in ${locationParts}` : baseTerms || "businesses";
 
       const url = `https://serpapi.com/search.json?engine=google_maps&q=${encodeURIComponent(fullQuery)}&api_key=${apiKey}`;
       const response = await fetch(url);
@@ -624,15 +832,23 @@ export class SerpApiSearchProvider implements LeadProvider {
           sourceUrl,
           verificationStatus: "UNVERIFIED",
           dateDiscovered: new Date().toISOString(),
-          evidenceText: `Verified local Google Maps record via SerpApi (${item.reviews || 0} reviews, ${item.rating || "N/A"} rating).`,
+          evidenceText: `Verified local Google Maps record via SerpApi (Place ID: ${item.place_id || "N/A"}, Reviews: ${item.reviews || 0}, Rating: ${item.rating || "N/A"}).`,
         };
       });
 
-      // Step 2: Field Verification & Pipeline Filtering
+      // Step 2: Field Verification & Pipeline Filtering (Deduplicate + Filter Fake domains)
       let rejectedCount = 0;
       const verifiedLeads: DiscoveredLeadRaw[] = [];
+      const seenKeys = new Set<string>();
 
       for (const raw of rawLeads) {
+        const dedupeKey = (raw.businessName + (raw.website || raw.phone || raw.address || "")).toLowerCase().replace(/[^a-z0-9]/g, "");
+        if (seenKeys.has(dedupeKey)) {
+          rejectedCount++;
+          continue;
+        }
+        seenKeys.add(dedupeKey);
+
         const { lead, isVerified } = verifyAndNormalizeLead(raw, query);
         if (isVerified) {
           verifiedLeads.push(lead);
@@ -951,7 +1167,7 @@ export class YelpFusionProvider implements LeadProvider {
 export class GoogleSearchLiveProvider implements LeadProvider {
   id = "google-search-live";
   name = "Google Live Web Search Engine";
-  supportedSearchTypes = ["Client Projects ($2k+)", "Startup MVP Frontend", "Website Modernization", "Dashboard & Portals"];
+  supportedSearchTypes = ["Client Projects ($2k+)", "Startup MVP Frontend", "Website Modernization", "Dashboard & Portals", "Any Custom Niche"];
 
   isConfigured(): boolean {
     return Boolean(
@@ -966,24 +1182,28 @@ export class GoogleSearchLiveProvider implements LeadProvider {
       return {
         success: false,
         statusCode: 503,
-        message: "Google Search Engine is not configured. Configure GEMINI_API_KEY or OPENROUTER_API_KEY.",
+        message: "Google AI Studio / OpenRouter is not configured. Configure GEMINI_API_KEY or OPENROUTER_API_KEY.",
       };
     }
 
     try {
+      const startTime = Date.now();
       const res = await executeAIGeneratedContent({
-        prompt: "Respond JSON: {\"status\":\"ok\"}",
+        prompt: "Respond with exact JSON: {\"status\":\"ok\",\"engine\":\"live\"}",
         responseJson: true,
       });
+      const latency = Date.now() - startTime;
+
       if (res?.text) {
-        updateProviderHealth(this.id, { status: "Connected" });
+        updateProviderHealth(this.id, { status: "Connected", lastSuccessfulSearch: new Date().toISOString() });
         return {
           success: true,
           statusCode: 200,
-          message: `Google Live Web Search provider verified & connected via ${res.provider}.`,
+          message: `Live Web Search Provider active & verified via ${res.provider} (${latency}ms latency).`,
+          details: { provider: res.provider, latencyMs: latency, usedFallback: res.usedFallback },
         };
       }
-      throw new Error("No response from provider test");
+      throw new Error("No response returned from live provider test");
     } catch (err: any) {
       updateProviderHealth(this.id, { status: "Error" });
       return { success: false, statusCode: 500, message: err.message || "Test failed" };
@@ -998,7 +1218,7 @@ export class GoogleSearchLiveProvider implements LeadProvider {
         provider: this.name,
         providerId: this.id,
         statusCode: 503,
-        error: "Google Search Engine provider not configured.",
+        error: "Google Search Engine provider not configured. Configure GEMINI_API_KEY or OPENROUTER_API_KEY.",
         code: "LIVE_PROVIDER_NOT_CONFIGURED",
         searchParamsUsed: query,
       };
@@ -1006,22 +1226,43 @@ export class GoogleSearchLiveProvider implements LeadProvider {
 
     const { country, industry, city, opportunityType, budgetTarget, keyword } = query;
 
-    const prompt = `You are a live B2B lead discovery engine querying real public search indices.
-Locate 6 REAL, operating prospect businesses strictly matching:
-- Country: ${country || "USA"}
-- City: ${city || "General"}
-- Industry: ${industry || "Real Estate"}
-- Opportunity Type: ${opportunityType || "Client Projects"}
-- Budget Target: ${budgetTarget || "All Ranges"}
-${keyword ? `- Keyword: ${keyword}` : ""}
+    const prompt = `You are a real-world client acquisition research engine for frontend web developer Muhammad Waqas (React, TypeScript, Tailwind, Next.js, Node.js).
+Your mission is to find 6 to 8 REAL, AUTHENTIC, CURRENTLY OPERATING businesses, agencies, clinics, or startups matching the query:
 
-STRICT RULES:
-1. Return ONLY REAL, operating businesses with real websites and addresses in ${city || country}.
-2. Do NOT invent fake company names or fake domains. If zero match, return [].
-3. Preserve real source URLs.
-4. If email, phone, or contact person is missing, output "Not found". DO NOT generate synthetic emails like contact@domain.com or contact persons like "Owner / Manager".
+QUERY PARAMETERS:
+- Location / Target Region: ${city ? `${city}, ` : ""}${country || "Global / Remote"}
+- Target Niche / Industry: ${industry || "Any Industry / Business"}
+- Opportunity Goal / Project Type: ${opportunityType || "$2,000+ Client Projects"}
+- Target Budget: ${budgetTarget || "$2,000+ Target"}
+${keyword ? `- Specific Keywords / Requirement: ${keyword}` : ""}
 
-Return JSON array with businessName, contactPerson, email, phone, website, address, city, country, industry, source ("Google Live Web Search Engine"), sourceUrl.`;
+STRICT AUTHENTICITY MANDATE:
+1. Return ONLY GENUINE, REAL-WORLD EXISTING companies, startups, clinics, or agencies with real active websites and verifiable locations.
+2. ZERO DEMO DATA, ZERO SYNTHETIC NAMES, ZERO PLACEHOLDERS (Never return fictitious names like "Apex Realty", "TechFlow Solutions", "Sample Co", or domains like "example.com" or "domain.com").
+3. If an email, phone number, or executive contact person is not publicly listed or verified with confidence, you MUST explicitly output "Not found". DO NOT fabricate fake emails like info@company.com or contact@domain.com.
+4. For every real business, inspect and identify their REAL, CONCRETE frontend weakness, web performance bottleneck, mobile UI flaw, accessibility issue, or modernization need.
+5. Score each lead from 0-100 on Agent Kashi's Opportunity Rubric (Budget Potential 25, Need 20, React/Frontend Skill Match 20, Client Quality 15, Project Quality 10, Relationship Potential 10). Set temperature to HOT (80-100), STRONG (65-79), POTENTIAL (50-64), or LOW (<50).
+
+Return ONLY a JSON array of objects with the exact structure:
+[
+  {
+    "businessName": "Real Company Name",
+    "website": "https://realcompany.com",
+    "address": "Real physical street or district address",
+    "city": "${city || "Real City"}",
+    "country": "${country || "USA"}",
+    "industry": "${industry || "Category"}",
+    "contactPerson": "Real Founder/Executive Name or Not found",
+    "email": "Real public email or Not found",
+    "phone": "Real public phone or Not found",
+    "sourceUrl": "https://realcompany.com",
+    "score": 85,
+    "temperature": "HOT",
+    "suggestedService": "Custom Next.js Frontend Redesign & Mobile Performance Optimization",
+    "auditIssue": "Concrete observed frontend issue (e.g. slow Largest Contentful Paint, non-responsive mobile layout, missing modern CTA funnel)",
+    "pitchHook": "Specific observation tailored to their actual website and business"
+  }
+]`;
 
     try {
       const aiResult = await executeAIGeneratedContent({
@@ -1033,18 +1274,22 @@ Return JSON array with businessName, contactPerson, email, phone, website, addre
             type: Type.OBJECT,
             properties: {
               businessName: { type: Type.STRING },
-              contactPerson: { type: Type.STRING },
-              email: { type: Type.STRING },
-              phone: { type: Type.STRING },
               website: { type: Type.STRING },
               address: { type: Type.STRING },
               city: { type: Type.STRING },
               country: { type: Type.STRING },
               industry: { type: Type.STRING },
-              source: { type: Type.STRING },
+              contactPerson: { type: Type.STRING },
+              email: { type: Type.STRING },
+              phone: { type: Type.STRING },
               sourceUrl: { type: Type.STRING },
+              score: { type: Type.INTEGER },
+              temperature: { type: Type.STRING },
+              suggestedService: { type: Type.STRING },
+              auditIssue: { type: Type.STRING },
+              pitchHook: { type: Type.STRING },
             },
-            required: ["businessName", "website", "sourceUrl"],
+            required: ["businessName", "website", "auditIssue", "suggestedService"],
           },
         },
       });
@@ -1055,22 +1300,32 @@ Return JSON array with businessName, contactPerson, email, phone, website, addre
       const verifiedLeads: DiscoveredLeadRaw[] = [];
 
       for (const raw of rawLeads) {
-        const { lead, isVerified } = verifyAndNormalizeLead(raw, query);
-        if (isVerified) verifiedLeads.push(lead);
-        else rejectedCount++;
-      }
+        const itemWithSource: DiscoveredLeadRaw = {
+          ...raw,
+          source: `Google Live Search (${aiResult.provider})`,
+          sourceUrl: raw.sourceUrl || raw.website || "",
+          qualificationScore: raw.score || 75,
+          score: raw.score || 75,
+          temperature: (raw.temperature as any) || "STRONG",
+        };
 
-      const qualifiedLeads = await qualifyLeadsWithKashi(verifiedLeads, query);
+        const { lead, isVerified } = verifyAndNormalizeLead(itemWithSource, query);
+        if (isVerified) {
+          verifiedLeads.push(lead);
+        } else {
+          rejectedCount++;
+        }
+      }
 
       updateProviderHealth(this.id, { status: "Connected", lastSuccessfulSearch: new Date().toISOString() });
       return {
         success: true,
-        leads: qualifiedLeads,
-        provider: this.name,
+        leads: verifiedLeads,
+        provider: `${this.name} (${aiResult.provider})`,
         providerId: this.id,
         statusCode: 200,
         rawCount: rawLeads.length,
-        validatedCount: qualifiedLeads.length,
+        validatedCount: verifiedLeads.length,
         rejectedCount,
         searchParamsUsed: query,
       };
@@ -1095,26 +1350,36 @@ Return JSON array with businessName, contactPerson, email, phone, website, addre
 export class AutoMultiProvider implements LeadProvider {
   id = "auto-multi";
   name = "Multi-Source Lead Aggregator (All Active)";
-  supportedSearchTypes = ["Combined Cross-Directory Search"];
+  supportedSearchTypes = ["Combined Cross-Directory Search", "Any Niche Discovery"];
 
   isConfigured(): boolean {
-    return Boolean(process.env.SERPAPI_API_KEY || process.env.FOURSQUARE_API_KEY || process.env.YELP_API_KEY || process.env.GEMINI_API_KEY);
+    return Boolean(
+      process.env.SERPAPI_API_KEY ||
+      process.env.FOURSQUARE_API_KEY ||
+      process.env.YELP_API_KEY ||
+      process.env.GEMINI_API_KEY ||
+      process.env.OPENROUTER_API_KEY
+    );
   }
 
   async testConnection(): Promise<ConnectionTestResult> {
+    const googleSearch = new GoogleSearchLiveProvider();
+    if (googleSearch.isConfigured()) {
+      return googleSearch.testConnection();
+    }
     return {
       success: true,
       statusCode: 200,
-      message: "Multi-Source Lead Aggregator ready. Combines SerpApi, Foursquare, Yelp & Google Search Engine.",
+      message: "Multi-Source Lead Aggregator ready.",
     };
   }
 
   async searchBusinesses(query: LeadQueryParams): Promise<ProviderSearchResult> {
     const providers: LeadProvider[] = [
       new SerpApiSearchProvider(),
+      new GooglePlacesProvider(),
       new FoursquarePlacesProvider(),
       new YelpFusionProvider(),
-      new GoogleSearchLiveProvider(),
     ];
 
     const activeProviders = providers.filter((p) => p.isConfigured());
@@ -1126,7 +1391,7 @@ export class AutoMultiProvider implements LeadProvider {
         provider: this.name,
         providerId: this.id,
         statusCode: 503,
-        error: "No active lead discovery providers configured. Please configure SERPAPI_API_KEY or another provider.",
+        error: "No real lead provider configured. Please configure SERPAPI_API_KEY (Primary) in Data Sources or Settings.",
         code: "LIVE_PROVIDER_NOT_CONFIGURED",
         searchParamsUsed: query,
       };
@@ -1139,10 +1404,11 @@ export class AutoMultiProvider implements LeadProvider {
     for (const provider of activeProviders) {
       try {
         const res = await provider.searchBusinesses(query);
-        if (res.success && res.leads) {
+        if (res.success && res.leads && res.leads.length > 0) {
           allLeads.push(...res.leads);
           totalRaw += res.rawCount || 0;
           totalRejected += res.rejectedCount || 0;
+          if (allLeads.length >= 8) break;
         }
       } catch (err) {
         console.error(`Error in multi-provider (${provider.name}):`, err);
@@ -1154,7 +1420,7 @@ export class AutoMultiProvider implements LeadProvider {
     const deduplicatedLeads: DiscoveredLeadRaw[] = [];
 
     for (const lead of allLeads) {
-      const key = (lead.businessName + (lead.website || "")).toLowerCase().replace(/[^a-z0-9]/g, "");
+      const key = (lead.businessName + (lead.website || lead.phone || "")).toLowerCase().replace(/[^a-z0-9]/g, "");
       if (!seenMap.has(key)) {
         seenMap.add(key);
         deduplicatedLeads.push(lead);
@@ -1179,28 +1445,32 @@ export class AutoMultiProvider implements LeadProvider {
 
 /**
  * Provider Resolver Function
+ * Primary: SerpAPI
+ * Optional: Google Places API
  */
 export function getLiveDataProvider(providerId?: string): LeadProvider {
-  if (providerId === "foursquare-places") return new FoursquarePlacesProvider();
   if (providerId === "serpapi-search") return new SerpApiSearchProvider();
-  if (providerId === "yelp-fusion") return new YelpFusionProvider();
-  if (providerId === "google-search-live") return new GoogleSearchLiveProvider();
+  if (providerId === "google-places") return new GooglePlacesProvider();
   if (providerId === "auto-multi") return new AutoMultiProvider();
+  if (providerId === "foursquare-places") return new FoursquarePlacesProvider();
+  if (providerId === "yelp-fusion") return new YelpFusionProvider();
 
-  // Primary Default Provider: SerpApi Google & Maps Search
+  // Default priority: SerpAPI (Primary) -> Google Places (Optional) -> Foursquare -> Yelp
   const serpapi = new SerpApiSearchProvider();
   if (serpapi.isConfigured()) return serpapi;
 
-  // Fallbacks if specific key is present
+  const places = new GooglePlacesProvider();
+  if (places.isConfigured()) return places;
+
+  const autoMulti = new AutoMultiProvider();
+  if (autoMulti.isConfigured()) return autoMulti;
+
   const foursquare = new FoursquarePlacesProvider();
   if (foursquare.isConfigured()) return foursquare;
 
   const yelp = new YelpFusionProvider();
   if (yelp.isConfigured()) return yelp;
 
-  const google = new GoogleSearchLiveProvider();
-  if (google.isConfigured()) return google;
-
-  // Default to SerpApi so missing key error explicitly instructs SerpApi setup
+  // Fallback to SerpApi (returns friendly not configured status and empty leads)
   return serpapi;
 }

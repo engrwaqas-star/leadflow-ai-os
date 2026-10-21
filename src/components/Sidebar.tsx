@@ -4,9 +4,7 @@ import {
   LayoutDashboard, 
   Search, 
   Database, 
-  Globe, 
   Send, 
-  Clock, 
   FileText, 
   BarChart3, 
   Settings, 
@@ -14,14 +12,8 @@ import {
   Inbox,
   Columns,
   Bot,
-  FolderOpen,
-  Users,
   X,
-  Sparkles,
-  ExternalLink,
-  Activity,
-  Trash2,
-  ShieldAlert
+  ExternalLink
 } from 'lucide-react';
 import { UserProfile } from '../types';
 
@@ -58,47 +50,33 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const sections: NavSection[] = [
     {
-      title: 'OVERVIEW',
+      title: 'CORE INTELLIGENCE',
       items: [
-        { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-        { id: 'kashi_agent', label: 'Agent Kashi', icon: Bot, isSpecial: true, tag: 'Co-Pilot' },
-        { id: 'team_activity', label: 'Team Activity', icon: Activity, isSpecial: true, tag: 'Proof Work' },
+        { id: 'dashboard', label: 'Executive Dashboard', icon: LayoutDashboard },
+        { id: 'kashi_agent', label: 'Agent Kashi', icon: Bot, isSpecial: true, tag: 'AI Lead OS' },
       ],
     },
     {
-      title: 'ACQUISITION & CRM',
+      title: 'CLIENT PIPELINE & CRM',
       items: [
         { id: 'finder', label: 'Find Clients', icon: Search },
-        { id: 'database', label: 'Lead Database', icon: Database },
-        { id: 'crm_suite', label: 'Client CRM & Deals', icon: Users },
+        { id: 'database', label: 'Leads & CRM', icon: Database },
         { id: 'pipeline', label: 'Pipeline Board', icon: Columns },
       ],
     },
     {
-      title: 'OUTREACH & INBOX',
+      title: 'OUTREACH ENGINE',
       items: [
-        { id: 'inbox', label: 'Inbox & Replies', icon: Inbox, badge: unreadInboxCount },
-        { id: 'opportunities', label: 'Opportunities', icon: Globe },
-        { id: 'outreach', label: 'Outreach Tracker', icon: Send },
-        { id: 'followups', label: 'Follow-ups', icon: Clock, badge: followupCount },
+        { id: 'outreach', label: 'Outreach & Sequences', icon: Send },
+        { id: 'inbox', label: 'Unified Inbox', icon: Inbox, badge: unreadInboxCount },
+        { id: 'templates', label: 'Pitch Templates', icon: FileText },
       ],
     },
     {
-      title: 'ASSETS & CONTENT',
+      title: 'ANALYTICS & CONTROL',
       items: [
-        { id: 'media_vault', label: 'Audit Media Folders', icon: FolderOpen },
-        { id: 'templates', label: 'Email Templates', icon: FileText },
-        { id: 'seo', label: 'SEO Agent', icon: Bot },
-      ],
-    },
-    {
-      title: 'SYSTEM',
-      items: [
-        { id: 'data_sources', label: 'Data Sources Health', icon: Globe },
-        { id: 'ai_status', label: 'AI Status Monitor', icon: Activity },
-        { id: 'cleanup', label: 'Data Cleanup Center', icon: Trash2, isSpecial: true, tag: 'Clean' },
-        { id: 'analytics', label: 'Analytics', icon: BarChart3 },
-        { id: 'settings', label: 'API & Settings', icon: Settings },
+        { id: 'analytics', label: 'Performance Analytics', icon: BarChart3 },
+        { id: 'settings', label: 'Settings & Integrations', icon: Settings },
       ],
     },
   ];
@@ -109,15 +87,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {/* Brand Header */}
         <div className="px-2 pt-1 pb-3 border-b border-slate-800/70 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-600 via-indigo-500 to-amber-500 flex items-center justify-center text-white shadow-md shadow-indigo-500/20 ring-1 ring-white/20">
-              <Zap className="w-5 h-5 fill-white" />
+            <div className="w-10 h-10 rounded-xl overflow-hidden bg-slate-900 border border-slate-700 shadow-md shadow-indigo-500/20 shrink-0">
+              <img
+                src="/leadflow_logo.jpg"
+                alt="LeadFlow AI Logo"
+                className="w-full h-full object-cover"
+                onError={(e) => {
+                  (e.target as HTMLElement).style.display = 'none';
+                }}
+              />
             </div>
             <div>
               <div className="font-black text-base tracking-tight text-white flex items-center gap-1.5">
-                LeadFlow <span className="bg-gradient-to-r from-indigo-400 to-amber-400 bg-clip-text text-transparent">AI</span>
+                LeadFlow <span className="bg-gradient-to-r from-indigo-400 to-indigo-200 bg-clip-text text-transparent">AI</span>
               </div>
               <span className="text-[10px] text-slate-400 font-extrabold uppercase tracking-widest block">
-                Enterprise Outreach OS
+                Automation OS
               </span>
             </div>
           </div>

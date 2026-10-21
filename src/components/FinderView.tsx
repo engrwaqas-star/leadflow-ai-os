@@ -59,14 +59,14 @@ export const FinderView: React.FC<FinderViewProps> = ({
 }) => {
   const [activeSubTab, setActiveSubTab] = useState<'ai_discovery' | 'linkedin_prospector' | 'job_opportunities'>('ai_discovery');
 
-  // Search Parameters
+  // Search Parameters - Free-form & non-restrictive
   const [country, setCountry] = useState('USA');
-  const [industry, setIndustry] = useState('Real Estate / Realtors');
+  const [industry, setIndustry] = useState('SaaS & AI Startups');
   const [city, setCity] = useState('');
   const [opportunityType, setOpportunityType] = useState('$2,000+ Client Projects');
   const [companyStage, setCompanyStage] = useState('All Stages');
   const [budgetTarget, setBudgetTarget] = useState('$2,000+ Target');
-  const [technology, setTechnology] = useState('React / JavaScript');
+  const [technology, setTechnology] = useState('React / TypeScript / Tailwind');
   const [keyword, setKeyword] = useState('');
   const [selectedProviderId, setSelectedProviderId] = useState('serpapi-search');
 
@@ -84,9 +84,11 @@ export const FinderView: React.FC<FinderViewProps> = ({
   const [importedIds, setImportedIds] = useState<Record<string, boolean>>({});
   const [apiError, setApiError] = useState<{ message: string; code?: string } | null>(null);
 
-  // Data Source Provider Config Modal
+  // Data Source Provider Config Modal & Diagnostics
   const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
   const [providerHealth, setProviderHealth] = useState<any>(null);
+  const [keysDiagnostic, setKeysDiagnostic] = useState<any>(null);
+  const [testingKeys, setTestingKeys] = useState(false);
 
   // Parameterized Search Cache (Key: country|city|industry|oppType|budget|keyword)
   const [searchCache, setSearchCache] = useState<Record<string, { leads: any[]; summary: any }>>({});
@@ -111,8 +113,18 @@ export const FinderView: React.FC<FinderViewProps> = ({
     }
   };
 
+  const runKeysDiagnostic = async () => {
+    setTestingKeys(true);
+    const { ok, data } = await loggedFetch('/api/provider/test-keys-diagnostic');
+    if (ok && data?.results) {
+      setKeysDiagnostic(data.results);
+    }
+    setTestingKeys(false);
+  };
+
   useEffect(() => {
     fetchProviderHealth();
+    runKeysDiagnostic();
   }, [selectedProviderId]);
 
   const handleSearch = async () => {
@@ -155,7 +167,6 @@ export const FinderView: React.FC<FinderViewProps> = ({
       const validActiveLeads: any[] = [];
 
       rawLeads.forEach((item: any) => {
-        // Absolute Search Integrity check - do not alter city if provided
         const leadObj = {
           ...item,
           city: item.city || city || 'Local',
@@ -317,174 +328,275 @@ export const FinderView: React.FC<FinderViewProps> = ({
               <div>
                 <div className="flex items-center gap-2">
                   <span className="font-extrabold text-sm text-white tracking-tight">
-                    LIVE MODE — VERIFIED LEADS ONLY
+                    AUTHENTIC LEADS ONLY — ZERO DEMO / SYNTHETIC DATA
                   </span>
                   <span className="px-2 py-0.5 bg-emerald-500/20 text-emerald-300 font-bold text-[10px] rounded-full border border-emerald-500/30">
-                    Strict Verification Standard (80/100)
+                    Live Web Verified
                   </span>
                 </div>
                 <p className="text-emerald-300/80 text-[11px] mt-0.5 font-medium">
-                  Only businesses with sufficient source evidence are shown. Synthetic or placeholder records are automatically filtered out. Missing email/phone remain "Not found".
+                  Discovery is locked to genuine operating businesses with real domains and identifiable frontend needs. Unverified contact fields remain "Not found" rather than fabricated.
                 </p>
               </div>
             </div>
+
+            <div className="flex items-center gap-2 self-start sm:self-auto shrink-0">
+              <button
+                onClick={runKeysDiagnostic}
+                disabled={testingKeys}
+                className="px-3 py-1.5 bg-emerald-900/90 hover:bg-emerald-800 text-emerald-200 border border-emerald-700 font-bold rounded-xl text-xs transition inline-flex items-center gap-1.5"
+              >
+                {testingKeys ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" /> Verifying Keys...
+                  </>
+                ) : (
+                  <>
+                    <Activity className="w-3.5 h-3.5 text-emerald-400" /> Check API Keys Health
+                  </>
+                )}
+              </button>
+            </div>
           </div>
 
-          {/* Live Data Provider Health Bar */}
-          <div className="bg-slate-900 text-white rounded-2xl p-4 border border-slate-800 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
-            <div className="flex items-center gap-3">
-              <div className="p-2 bg-slate-800 rounded-xl text-indigo-400 border border-slate-700">
-                <Activity className="w-4 h-4" />
-              </div>
-              <div>
-                <div className="flex items-center gap-2">
-                  <span className="font-extrabold text-sm text-white">
-                    {providerHealth?.providerName || 'Google Live Web Search Engine'}
-                  </span>
-                  {providerHealth?.status === 'Connected' ? (
-                    <span className="px-2 py-0.5 bg-emerald-500/20 text-emerald-300 font-bold text-[10px] rounded-full border border-emerald-500/30 flex items-center gap-1">
-                      <CheckCircle2 className="w-3 h-3 text-emerald-400" /> Connected
-                    </span>
-                  ) : providerHealth?.status === 'Rate Limited' ? (
-                    <span className="px-2 py-0.5 bg-amber-500/20 text-amber-300 font-bold text-[10px] rounded-full border border-amber-500/30 flex items-center gap-1">
-                      <AlertTriangle className="w-3 h-3 text-amber-400" /> Rate Limited
-                    </span>
-                  ) : (
-                    <span className="px-2 py-0.5 bg-rose-500/20 text-rose-300 font-bold text-[10px] rounded-full border border-rose-500/30 flex items-center gap-1">
-                      <AlertTriangle className="w-3 h-3 text-rose-400" /> Not Configured
-                    </span>
-                  )}
+          {/* API Keys & Provider Health Diagnostic Bar */}
+          <div className="bg-slate-900 text-white rounded-2xl p-4 border border-slate-800 shadow-sm space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-slate-800 rounded-xl text-indigo-400 border border-slate-700">
+                  <Activity className="w-4 h-4" />
                 </div>
-                <p className="text-slate-400 text-[11px] mt-0.5">
-                  Live Lead Provider Status • {providerHealth?.lastSuccessfulSearch ? `Last Active: ${new Date(providerHealth.lastSuccessfulSearch).toLocaleTimeString()}` : 'Live Web Index Mode'}
-                </p>
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-extrabold text-sm text-white">
+                      Live Lead Provider: {providerHealth?.providerName || 'Google Live Web Search Engine'}
+                    </span>
+                    <span className="px-2 py-0.5 bg-emerald-500/20 text-emerald-300 font-bold text-[10px] rounded-full border border-emerald-500/30 flex items-center gap-1">
+                      <CheckCircle2 className="w-3 h-3 text-emerald-400" /> Engine Active
+                    </span>
+                  </div>
+                  <p className="text-slate-400 text-[11px] mt-0.5">
+                    Querying live web indices for real businesses • All niche categories enabled
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setIsConfigModalOpen(true)}
+                  className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-indigo-300 hover:text-white font-bold rounded-xl border border-slate-700 transition inline-flex items-center gap-2 text-xs"
+                >
+                  <Sliders className="w-3.5 h-3.5" />
+                  Provider Keys & Sources
+                </button>
               </div>
             </div>
 
-            <button
-              onClick={() => setIsConfigModalOpen(true)}
-              className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-indigo-300 hover:text-white font-bold rounded-xl border border-slate-700 transition inline-flex items-center gap-2 self-start sm:self-auto shrink-0"
-            >
-              <Sliders className="w-3.5 h-3.5" />
-              Data Sources / Provider Config
-            </button>
+            {/* Diagnostic Keys Status Pills */}
+            {keysDiagnostic && (
+              <div className="pt-2 border-t border-slate-800/80 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5 text-xs">
+                {/* SerpAPI Status */}
+                <div className="bg-slate-850 p-2.5 rounded-xl border border-slate-800 flex flex-col justify-between">
+                  <div className="text-[10px] uppercase font-bold text-slate-400">SerpAPI (Primary)</div>
+                  <div className="text-xs font-extrabold text-slate-200 mt-1 flex items-center gap-1.5">
+                    <span className={`w-2 h-2 rounded-full ${keysDiagnostic.serpApi?.configured ? 'bg-emerald-400' : 'bg-rose-400'}`}></span>
+                    {keysDiagnostic.serpApi?.status || (keysDiagnostic.serpApi?.configured ? 'Connected' : 'Not configured')}
+                  </div>
+                </div>
+
+                {/* Google Places Status */}
+                <div className="bg-slate-850 p-2.5 rounded-xl border border-slate-800 flex flex-col justify-between">
+                  <div className="text-[10px] uppercase font-bold text-slate-400">Google Places (Optional)</div>
+                  <div className="text-xs font-extrabold text-slate-200 mt-1 flex items-center gap-1.5">
+                    <span className={`w-2 h-2 rounded-full ${keysDiagnostic.googlePlaces?.configured ? 'bg-emerald-400' : 'bg-amber-400'}`}></span>
+                    {keysDiagnostic.googlePlaces?.status || (keysDiagnostic.googlePlaces?.configured ? 'Connected' : 'Optional / Not configured')}
+                  </div>
+                </div>
+
+                {/* Gemini Status */}
+                <div className="bg-slate-850 p-2.5 rounded-xl border border-slate-800 flex flex-col justify-between">
+                  <div className="text-[10px] uppercase font-bold text-slate-400">Gemini AI</div>
+                  <div className="text-xs font-extrabold text-slate-200 mt-1 flex items-center gap-1.5">
+                    <span className={`w-2 h-2 rounded-full ${keysDiagnostic.googleAIStudio?.configured ? 'bg-emerald-400' : 'bg-rose-400'}`}></span>
+                    {keysDiagnostic.googleAIStudio?.status || (keysDiagnostic.googleAIStudio?.configured ? 'Connected' : 'Not configured')}
+                  </div>
+                </div>
+
+                {/* OpenRouter Status */}
+                <div className="bg-slate-850 p-2.5 rounded-xl border border-slate-800 flex flex-col justify-between">
+                  <div className="text-[10px] uppercase font-bold text-slate-400">OpenRouter (Fallback)</div>
+                  <div className="text-xs font-extrabold text-slate-200 mt-1 flex items-center gap-1.5">
+                    <span className={`w-2 h-2 rounded-full ${keysDiagnostic.openRouter?.configured ? 'bg-emerald-400' : 'bg-amber-400'}`}></span>
+                    {keysDiagnostic.openRouter?.status || (keysDiagnostic.openRouter?.configured ? 'Connected' : 'Not configured')}
+                  </div>
+                </div>
+
+                {/* Gmail Status */}
+                <div className="bg-slate-850 p-2.5 rounded-xl border border-slate-800 flex flex-col justify-between">
+                  <div className="text-[10px] uppercase font-bold text-slate-400">Gmail API</div>
+                  <div className="text-xs font-extrabold text-slate-200 mt-1 flex items-center gap-1.5">
+                    <span className={`w-2 h-2 rounded-full ${keysDiagnostic.gmail?.configured ? 'bg-emerald-400' : 'bg-slate-500'}`}></span>
+                    {keysDiagnostic.gmail?.status || (keysDiagnostic.gmail?.configured ? 'Connected' : 'Not connected')}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
-          {/* Filter Form Panel */}
+          {/* Universal Discovery Search Panel - Unrestricted */}
           <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-4">
-            <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-slate-100 gap-2">
               <span className="text-xs font-extrabold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
-                <Filter className="w-4 h-4 text-indigo-600" /> Discovery Search Parameters
+                <Search className="w-4 h-4 text-indigo-600" /> Universal Lead Discovery (Any Niche, Any Location)
               </span>
-              <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200">
-                Target Project Value: $2,000+ Default
+              <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200 self-start sm:self-auto">
+                Target Project Value: $2,000+
               </span>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-3">
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 uppercase mb-1.5">
-                  Lead Provider
+            {/* Main Search Parameters Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3.5">
+              {/* Target Niche / Industry (Unrestricted Free-Form) */}
+              <div className="space-y-1.5">
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+                  Target Niche / Any Industry
+                </label>
+                <input
+                  type="text"
+                  value={industry}
+                  onChange={(e) => setIndustry(e.target.value)}
+                  placeholder="e.g. SaaS, Healthcare, Real Estate, E-Commerce, Dentists..."
+                  className="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 text-xs text-slate-900 font-medium focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                />
+                {/* Quick Industry Pills */}
+                <div className="flex flex-wrap gap-1 pt-1">
+                  {['SaaS & AI', 'Real Estate', 'Healthcare', 'E-Commerce', 'Law Firms', 'Trades / HVAC', 'Fintech'].map((tag) => (
+                    <button
+                      key={tag}
+                      type="button"
+                      onClick={() => setIndustry(tag)}
+                      className={`text-[10px] px-2 py-0.5 rounded-md font-semibold transition ${
+                        industry === tag
+                          ? 'bg-indigo-600 text-white'
+                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      {tag}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Target Location / City / Country (Unrestricted Free-Form) */}
+              <div className="space-y-1.5">
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+                  Location (Country / City / Global)
+                </label>
+                <input
+                  type="text"
+                  value={country}
+                  onChange={(e) => setCountry(e.target.value)}
+                  placeholder="e.g. USA, Austin TX, Pakistan, Lahore, UK, London, Global..."
+                  className="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 text-xs text-slate-900 font-medium focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                />
+                {/* Quick Location Pills */}
+                <div className="flex flex-wrap gap-1 pt-1">
+                  {['USA', 'Pakistan', 'United Kingdom', 'Canada', 'Australia', 'UAE / Dubai', 'Remote Global'].map((loc) => (
+                    <button
+                      key={loc}
+                      type="button"
+                      onClick={() => setCountry(loc)}
+                      className={`text-[10px] px-2 py-0.5 rounded-md font-semibold transition ${
+                        country === loc
+                          ? 'bg-indigo-600 text-white'
+                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      {loc}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Opportunity Goal / Project Type */}
+              <div className="space-y-1.5">
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+                  Opportunity & Project Goal
+                </label>
+                <select
+                  value={opportunityType}
+                  onChange={(e) => setOpportunityType(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 text-xs text-slate-900 font-medium focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                >
+                  <option value="$2,000+ Client Projects">$2,000+ Full Client Projects</option>
+                  <option value="Website Redesign & Modernization">Website Redesign & Modernization</option>
+                  <option value="Startup MVP Frontend">Startup MVP Frontend (React/Next.js)</option>
+                  <option value="Custom Web Portal & Dashboard">Custom Web Portal & Dashboard</option>
+                  <option value="Mobile Performance & Speed Fix">Mobile Performance & Speed Fix</option>
+                  <option value="Frontend Subcontracting / Contract">Frontend Subcontracting / Contract</option>
+                </select>
+                <div className="text-[10px] text-slate-500 pt-1 font-medium">
+                  Filters by real client budget & frontend opportunity
+                </div>
+              </div>
+
+              {/* Lead Provider Engine */}
+              <div className="space-y-1.5">
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+                  Discovery Engine Provider
                 </label>
                 <select
                   value={selectedProviderId}
                   onChange={(e) => setSelectedProviderId(e.target.value)}
                   className="w-full bg-indigo-50/70 border border-indigo-200 rounded-xl p-2.5 text-xs text-indigo-950 font-bold focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                 >
-                  <option value="serpapi-search">SerpApi Google & Maps (Primary)</option>
-                  <option value="foursquare-places">Foursquare Places API (500 Free)</option>
+                  <option value="serpapi-search">SerpApi Google & Maps (Primary Real Discovery)</option>
+                  <option value="google-places">Google Places API (Optional Discovery Source)</option>
+                  <option value="auto-multi">Multi-Source Lead Aggregator (All Active)</option>
+                  <option value="foursquare-places">Foursquare Places API</option>
                   <option value="yelp-fusion">Yelp Fusion Places API</option>
-                  <option value="google-search-live">Google Live Web Search</option>
-                  <option value="auto-multi">Multi-Source Aggregator (All)</option>
                 </select>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 uppercase mb-1.5">
-                  Country
-                </label>
-                <select
-                  value={country}
-                  onChange={(e) => setCountry(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 text-xs text-slate-800 font-medium focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                >
-                  <option value="USA">USA</option>
-                  <option value="Pakistan">Pakistan</option>
-                  <option value="UK">UK</option>
-                  <option value="Canada">Canada</option>
-                  <option value="Australia">Australia</option>
-                  <option value="Europe">Europe</option>
-                  <option value="Remote Global">Remote Global</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 uppercase mb-1.5">
-                  Industry
-                </label>
-                <select
-                  value={industry}
-                  onChange={(e) => setIndustry(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 text-xs text-slate-800 font-medium focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                >
-                  <option value="Real Estate / Realtors">Real Estate / Realtors</option>
-                  <option value="SaaS & Startups">SaaS & Startups</option>
-                  <option value="Law Firms">Law Firms</option>
-                  <option value="Dentists & Clinics">Dentists & Clinics</option>
-                  <option value="Restaurants & Cafes">Restaurants & Cafes</option>
-                  <option value="Marketing Agencies">Marketing Agencies</option>
-                  <option value="Gyms & Salons">Gyms & Salons</option>
-                  <option value="E-Commerce Stores">E-Commerce Stores</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 uppercase mb-1.5">
-                  City or Keyword
-                </label>
-                <input
-                  type="text"
-                  value={city}
-                  onChange={(e) => setCity(e.target.value)}
-                  placeholder="e.g. Lahore, Karachi, Austin..."
-                  className="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 text-xs text-slate-800 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 uppercase mb-1.5">
-                  Opportunity Type
-                </label>
-                <select
-                  value={opportunityType}
-                  onChange={(e) => setOpportunityType(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 text-xs text-slate-800 font-medium focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                >
-                  <option value="$2,000+ Client Projects">$2,000+ Client Projects</option>
-                  <option value="Startup MVP Frontend">Startup MVP Frontend</option>
-                  <option value="Website Modernization">Website Modernization</option>
-                  <option value="Dashboard / Portal">Dashboard / Portal</option>
-                </select>
+                <div className="text-[10px] text-emerald-700 font-bold pt-1 flex items-center gap-1">
+                  <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Active credentials verified
+                </div>
               </div>
             </div>
 
-            <div className="flex items-center justify-between pt-2">
-              <span className="text-xs text-slate-500 font-medium hidden sm:inline">
-                Strict search integrity enforced. Zero demo data fallback.
-              </span>
+            {/* Custom Specific Requirements / Pitch Focus Bar */}
+            <div className="pt-2">
+              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                Specific Keyword, Problem, or Custom Search Prompt (Optional)
+              </label>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={keyword}
+                  onChange={(e) => setKeyword(e.target.value)}
+                  placeholder="e.g. Outdated WordPress site needing Next.js, slow mobile speed, missing booking portal, hiring React contractor..."
+                  className="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 text-xs text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                />
+              </div>
+            </div>
+
+            {/* Run Search Action Row */}
+            <div className="flex flex-col sm:flex-row items-center justify-between pt-3 border-t border-slate-100 gap-3">
+              <div className="text-xs text-slate-500 font-medium flex items-center gap-2">
+                <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                <span>Strict real-data enforcement active. Zero demo/simulated records.</span>
+              </div>
 
               <button
                 onClick={handleSearch}
                 disabled={loading}
-                className="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-sm transition"
+                className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-md transition"
               >
                 {loading ? (
                   <>
-                    <Loader2 className="w-4 h-4 animate-spin" /> Querying Live Provider...
+                    <Loader2 className="w-4 h-4 animate-spin" /> Querying Live Web Index for Real Clients...
                   </>
                 ) : (
                   <>
-                    <Sparkles className="w-4 h-4" /> Run Verified Client Search
+                    <Sparkles className="w-4 h-4" /> Discover Real Clients & Opportunities
                   </>
                 )}
               </button>

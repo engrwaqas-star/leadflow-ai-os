@@ -1,29 +1,37 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Menu, Zap, Terminal } from 'lucide-react';
+import { Menu, Zap, Terminal, Cloud, Database } from 'lucide-react';
 import { Sidebar } from './components/Sidebar';
 import { ApiBanner } from './components/ApiBanner';
 import { LiveClock } from './components/LiveClock';
 import { DebugPanel } from './components/DebugPanel';
 import { loggedFetch } from './utils/apiLogger';
+import { 
+  auth, 
+  db, 
+  signInWithGoogle, 
+  logOut, 
+  testConnection, 
+  onAuthStateChanged, 
+  type User, 
+  doc, 
+  setDoc, 
+  getDocs, 
+  collection, 
+  FIREBASE_CONSOLE_URL, 
+  GCP_CONSOLE_URL,
+  FIREBASE_PROJECT_ID,
+  FIRESTORE_DATABASE_ID
+} from './firebase';
 import { DashboardView } from './components/DashboardView';
 import { FinderView } from './components/FinderView';
 import { DatabaseView } from './components/DatabaseView';
 import { InboxView } from './components/InboxView';
-import { OpportunitiesView } from './components/OpportunitiesView';
 import { OutreachTrackerView } from './components/OutreachTrackerView';
-import { FollowupsView } from './components/FollowupsView';
 import { TemplatesView } from './components/TemplatesView';
-import { PortfolioView } from './components/PortfolioView';
 import { PipelineView } from './components/PipelineView';
-import { SeoAgentView } from './components/SeoAgentView';
 import { AnalyticsView } from './components/AnalyticsView';
 import { SettingsView } from './components/SettingsView';
-import { MediaVaultView } from './components/MediaVaultView';
-import { CrmSuiteView } from './components/CrmSuiteView';
 import { KashiAgentView } from './components/KashiAgentView';
-import { TeamActivityView } from './components/TeamActivityView';
-import { CleanupCenterView } from './components/CleanupCenterView';
-import { DataSourcesView } from './components/DataSourcesView';
 import { ToastContainer } from './components/ToastContainer';
 
 import { LeadModal } from './components/LeadModal';
@@ -45,7 +53,9 @@ import {
   SuppressedDomainRecord,
   AutoCleanupSettings,
   ToastNotice,
-  CleanupReason
+  CleanupReason,
+  AutomatedSequence,
+  SequenceStep
 } from './types';
 import { exportLeadsToExcel } from './utils/excel';
 
@@ -117,6 +127,18 @@ export default function App() {
       } catch (e) { /* ignore */ }
     }
     return INITIAL_SCHEDULED_EMAILS;
+  });
+
+  // Persistent Automated Follow-Up Sequences (3, 7, 14 Days)
+  const [automatedSequences, setAutomatedSequences] = useState<AutomatedSequence[]>(() => {
+    const saved = localStorage.getItem('leadflow_sequences');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
+      } catch (e) { /* ignore */ }
+    }
+    return [];
   });
 
   // Persistent User Profile
@@ -213,6 +235,94 @@ export default function App() {
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [isDebugOpen, setIsDebugOpen] = useState(false);
 
+  // Firebase & Google Cloud Sync State
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [isSyncingCloud, setIsSyncingCloud] = useState(false);
+  const [cloudSyncStatus, setCloudSyncStatus] = useState<string | null>('Connected to Firebase');
+
+  useEffect(() => {
+    // Validate connection on boot per Firebase Integration Skill requirement
+    testConnection().then((connected) => {
+      if (connected) {
+        setCloudSyncStatus('Firebase Online');
+      }
+    });
+
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setCurrentUser(user);
+      if (user) {
+        setCloudSyncStatus(`Synced as ${user.email}`);
+      } else {
+        setCloudSyncStatus('Firebase Ready');
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  const handleSignInGoogle = async () => {
+    try {
+      const user = await signInWithGoogle();
+      if (user) {
+        showToast(`Google Cloud Connected: Signed in as ${user.email}. Live sync active!`);
+      }
+    } catch (err: any) {
+      showToast(`Sign In Failed: ${err.message || 'Could not authenticate with Google'}`);
+    }
+  };
+
+  const handleSignOut = async () => {
+    try {
+      await logOut();
+      showToast('Disconnected from Google account.');
+    } catch (err: any) {
+      console.error(err);
+    }
+  };
+
+  const handleSyncAllToCloud = async () => {
+    setIsSyncingCloud(true);
+    try {
+      const uid = currentUser?.uid || 'local_user';
+      let count = 0;
+      for (const lead of leads) {
+        await setDoc(doc(db, 'users', uid, 'leads', lead.id), {
+          ...lead,
+          ownerId: uid,
+          updatedAt: new Date().toISOString()
+        }, { merge: true });
+        count++;
+      }
+      setCloudSyncStatus(`Synced ${count} leads to Cloud`);
+      showToast(`Successfully synchronized ${count} leads to Firestore database!`);
+    } catch (err: any) {
+      console.error('Cloud sync error:', err);
+      showToast('Cloud Sync Note: Sign in with Google to write to your secured cloud Firestore paths, or view existing records in Console.');
+    } finally {
+      setIsSyncingCloud(false);
+    }
+  };
+
+  const handlePullFromCloud = async () => {
+    if (!currentUser) return;
+    setIsSyncingCloud(true);
+    try {
+      const snap = await getDocs(collection(db, 'users', currentUser.uid, 'leads'));
+      const cloudLeads: Lead[] = [];
+      snap.forEach((d) => {
+        cloudLeads.push(d.data() as Lead);
+      });
+      if (cloudLeads.length > 0) {
+        setLeads(cloudLeads);
+        showToast(`Restored from Cloud: Fetched ${cloudLeads.length} leads from Google Firestore.`);
+      }
+    } catch (err: any) {
+      console.error('Pull error:', err);
+    } finally {
+      setIsSyncingCloud(false);
+    }
+  };
+
   // Background 30-Minute Inbox Poller State
   const [lastPolledAt, setLastPolledAt] = useState<Date | null>(new Date());
   const [isPolling, setIsPolling] = useState(false);
@@ -277,6 +387,30 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('leadflow_scheduled', JSON.stringify(scheduledEmails));
   }, [scheduledEmails]);
+
+  useEffect(() => {
+    localStorage.setItem('leadflow_sequences', JSON.stringify(automatedSequences));
+  }, [automatedSequences]);
+
+  // Synchronize Sequence Status with Lead Contact Status
+  // If lead status is no longer 'Contacted' (e.g. 'Replied', 'Closed Won', 'Declined', 'Closed Lost'), auto-halt active sequences
+  useEffect(() => {
+    setAutomatedSequences((prev) =>
+      prev.map((seq) => {
+        const lead = leads.find((l) => l.id === seq.leadId);
+        if (!lead) return seq;
+        if (seq.status === 'Active' && lead.contactStatus !== 'Contacted') {
+          return {
+            ...seq,
+            status: 'Halted',
+            haltReason: `Lead status changed to "${lead.contactStatus}" — sequence automatically halted.`,
+            updatedAt: new Date().toISOString(),
+          };
+        }
+        return seq;
+      })
+    );
+  }, [leads]);
 
   useEffect(() => {
     localStorage.setItem('leadflow_profile', JSON.stringify(profile));
@@ -670,6 +804,265 @@ export default function App() {
           : l
       )
     );
+
+    // Auto-create sequence if not already present
+    if (targetLead) {
+      setAutomatedSequences((prev) => {
+        if (prev.some((s) => s.leadId === leadId && s.status === 'Active')) {
+          return prev;
+        }
+        const steps = createDefaultSequenceSteps(targetLead, profile.name, today);
+        const newSeq: AutomatedSequence = {
+          id: `seq-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+          leadId,
+          businessName: targetLead.businessName,
+          contactPerson: targetLead.contactPerson,
+          email: targetLead.email,
+          initialContactDate: today,
+          status: 'Active',
+          currentStepIndex: 0,
+          steps,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+        return [newSeq, ...prev];
+      });
+    }
+  };
+
+  const createDefaultSequenceSteps = (
+    lead: Lead,
+    devName: string,
+    initialContactDate: string
+  ): SequenceStep[] => {
+    const baseDate = initialContactDate ? new Date(initialContactDate) : new Date();
+    const contactName =
+      lead.contactPerson && lead.contactPerson !== 'Not found' && lead.contactPerson !== 'Unknown'
+        ? lead.contactPerson
+        : 'there';
+    const problem = lead.auditIssue || lead.websiteStatus || 'mobile responsiveness and Core Web Vitals loading speed';
+
+    const addDaysToIso = (d: Date, days: number): string => {
+      const target = new Date(d);
+      target.setDate(target.getDate() + days);
+      return target.toISOString().split('T')[0];
+    };
+
+    return [
+      {
+        stepNumber: 1,
+        delayDays: 3,
+        title: 'Step 1: Visual Proof & Interactive Walkthrough (Day 3)',
+        subject: `Quick video demo on ${lead.website || lead.businessName}'s mobile speed`,
+        body: `Hi ${contactName},\n\nFollowing up on my previous note regarding ${lead.businessName}. I put together a quick 2-minute video walkthrough showing how fixing ${problem} can improve your mobile conversion rate.\n\nMind if I send the link over?\n\nBest,\n${devName}`,
+        scheduledDate: addDaysToIso(baseDate, 3),
+        status: 'Pending',
+      },
+      {
+        stepNumber: 2,
+        delayDays: 7,
+        title: 'Step 2: 3-Tier Scope of Work & Pricing Packages (Day 7)',
+        subject: `SOW & pricing packages for ${lead.businessName}`,
+        body: `Hi ${contactName},\n\nWanted to share a quick 3-tier Scope of Work for ${lead.businessName}:\n• Tier 1 ($450): Rapid ${problem} fix (2-3 days)\n• Tier 2 ($1,200): Modern React/Tailwind UX overhaul (5-7 days)\n• Tier 3 ($2,400+): Full Next.js frontend rebuild (10-14 days)\n\nHappy to share the full markdown proposal if this aligns with your current roadmap.\n\nBest,\n${devName}`,
+        scheduledDate: addDaysToIso(baseDate, 7),
+        status: 'Pending',
+      },
+      {
+        stepNumber: 3,
+        delayDays: 14,
+        title: 'Step 3: Permission Breakaway & Final Follow-up (Day 14)',
+        subject: `Closing the loop on ${lead.businessName}`,
+        body: `Hi ${contactName},\n\nI'll assume you're all set or have this covered internally for now, so I won't follow up again.\n\nIf you ever need a rapid frontend sprint partner for React, Tailwind, or performance optimization, feel free to reach back out.\n\nWishing ${lead.businessName} continued success!\n\nBest,\n${devName}`,
+        scheduledDate: addDaysToIso(baseDate, 14),
+        status: 'Pending',
+      },
+    ];
+  };
+
+  const handleStartSequence = async (leadId: string, customDate?: string) => {
+    const lead = leads.find((l) => l.id === leadId);
+    if (!lead) return;
+    const initialDate = customDate || lead.lastContactDate || new Date().toISOString().split('T')[0];
+
+    // Ensure lead status is Contacted
+    if (lead.contactStatus === 'Not Contacted') {
+      setLeads((prev) =>
+        prev.map((l) =>
+          l.id === leadId
+            ? { ...l, contactStatus: 'Contacted', lastContactDate: initialDate }
+            : l
+        )
+      );
+    }
+
+    try {
+      const res = await fetch('/api/ai/generate-sequence', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lead, userProfile: profile, initialContactDate: initialDate }),
+      });
+      const data = await res.json();
+      if (data.success && data.sequence) {
+        setAutomatedSequences((prev) => [
+          data.sequence,
+          ...prev.filter((s) => s.leadId !== leadId),
+        ]);
+        showToast(`3-Step automated sequence scheduled for ${lead.businessName}!`);
+        return;
+      }
+    } catch (e) {
+      console.warn('AI sequence generation fallback to local template:', e);
+    }
+
+    const steps = createDefaultSequenceSteps(lead, profile.name, initialDate);
+    const newSeq: AutomatedSequence = {
+      id: `seq-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      leadId: lead.id,
+      businessName: lead.businessName,
+      contactPerson: lead.contactPerson,
+      email: lead.email,
+      initialContactDate: initialDate,
+      status: 'Active',
+      currentStepIndex: 0,
+      steps,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    setAutomatedSequences((prev) => [
+      newSeq,
+      ...prev.filter((s) => s.leadId !== leadId),
+    ]);
+    showToast(`3-Step automated sequence scheduled for ${lead.businessName}!`);
+  };
+
+  const handleBatchStartSequences = () => {
+    const contactedLeadsWithoutSeq = leads.filter(
+      (l) =>
+        l.contactStatus === 'Contacted' &&
+        !automatedSequences.some((s) => s.leadId === l.id && s.status === 'Active')
+    );
+
+    if (contactedLeadsWithoutSeq.length === 0) {
+      showToast('All currently contacted leads already have active sequences.');
+      return;
+    }
+
+    const newSeqs: AutomatedSequence[] = contactedLeadsWithoutSeq.map((lead) => {
+      const initialDate = lead.lastContactDate || new Date().toISOString().split('T')[0];
+      const steps = createDefaultSequenceSteps(lead, profile.name, initialDate);
+      return {
+        id: `seq-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+        leadId: lead.id,
+        businessName: lead.businessName,
+        contactPerson: lead.contactPerson,
+        email: lead.email,
+        initialContactDate: initialDate,
+        status: 'Active',
+        currentStepIndex: 0,
+        steps,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+    });
+
+    setAutomatedSequences((prev) => [...newSeqs, ...prev]);
+    showToast(`Enrolled ${newSeqs.length} contacted leads into 3-step follow-up sequences!`);
+  };
+
+  const handlePauseSequence = (sequenceId: string) => {
+    setAutomatedSequences((prev) =>
+      prev.map((s) =>
+        s.id === sequenceId
+          ? { ...s, status: 'Paused', updatedAt: new Date().toISOString() }
+          : s
+      )
+    );
+    showToast('Sequence paused.');
+  };
+
+  const handleResumeSequence = (sequenceId: string) => {
+    setAutomatedSequences((prev) =>
+      prev.map((s) =>
+        s.id === sequenceId
+          ? { ...s, status: 'Active', updatedAt: new Date().toISOString() }
+          : s
+      )
+    );
+    showToast('Sequence resumed.');
+  };
+
+  const handleCancelSequence = (sequenceId: string) => {
+    setAutomatedSequences((prev) =>
+      prev.map((s) =>
+        s.id === sequenceId
+          ? {
+              ...s,
+              status: 'Cancelled',
+              haltReason: 'Manually cancelled by user',
+              steps: s.steps.map((st) => (st.status === 'Pending' ? { ...st, status: 'Cancelled' } : st)),
+              updatedAt: new Date().toISOString(),
+            }
+          : s
+      )
+    );
+    showToast('Sequence cancelled.');
+  };
+
+  const handleUpdateSequenceStep = (
+    sequenceId: string,
+    stepNumber: 1 | 2 | 3,
+    subject: string,
+    body: string,
+    scheduledDate: string
+  ) => {
+    setAutomatedSequences((prev) =>
+      prev.map((seq) => {
+        if (seq.id !== sequenceId) return seq;
+        const updatedSteps = seq.steps.map((st) =>
+          st.stepNumber === stepNumber
+            ? { ...st, subject, body, scheduledDate }
+            : st
+        );
+        return { ...seq, steps: updatedSteps, updatedAt: new Date().toISOString() };
+      })
+    );
+    showToast(`Step ${stepNumber} updated successfully!`);
+  };
+
+  const handleSendSequenceStepNow = (sequenceId: string, stepNumber: 1 | 2 | 3) => {
+    const seq = automatedSequences.find((s) => s.id === sequenceId);
+    if (!seq) return;
+    const step = seq.steps.find((st) => st.stepNumber === stepNumber);
+    if (!step) return;
+
+    handleLogOutreach(seq.leadId, step.subject, step.body);
+
+    const nowISO = new Date().toISOString();
+    setAutomatedSequences((prev) =>
+      prev.map((s) => {
+        if (s.id !== sequenceId) return s;
+        const updatedSteps = s.steps.map((st) =>
+          st.stepNumber === stepNumber
+            ? { ...st, status: 'Sent' as const, sentAt: nowISO }
+            : st
+        );
+        const allSent = updatedSteps.every((st) => st.status === 'Sent' || st.status === 'Skipped');
+        return {
+          ...s,
+          steps: updatedSteps,
+          currentStepIndex: Math.min(stepNumber, 3),
+          status: allSent ? 'Completed' as const : s.status,
+          updatedAt: nowISO,
+        };
+      })
+    );
+    showToast(`Dispatched Step ${stepNumber} to ${seq.email}!`);
+  };
+
+  const handleDeleteSequence = (sequenceId: string) => {
+    setAutomatedSequences((prev) => prev.filter((s) => s.id !== sequenceId));
+    showToast('Sequence deleted.');
   };
 
   const handleScheduleOutreach = (
@@ -764,8 +1157,15 @@ export default function App() {
       {/* Mobile Top Header */}
       <div className="lg:hidden bg-slate-900 text-white p-4 flex items-center justify-between border-b border-slate-800 sticky top-0 z-40">
         <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center text-white font-black">
-            <Zap className="w-4 h-4 fill-white" />
+          <div className="w-8 h-8 rounded-lg overflow-hidden bg-slate-900 border border-slate-700 flex items-center justify-center shrink-0">
+            <img
+              src="/leadflow_logo.jpg"
+              alt="LeadFlow AI"
+              className="w-full h-full object-cover"
+              onError={(e) => {
+                (e.target as HTMLElement).style.display = 'none';
+              }}
+            />
           </div>
           <span className="font-extrabold text-base tracking-tight text-white">
             LeadFlow <span className="text-indigo-400">AI</span>
@@ -808,14 +1208,21 @@ export default function App() {
         {/* Top Real-time System Header & Live Clock */}
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 bg-white p-3.5 rounded-2xl border border-slate-200/80 shadow-xs">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-600 to-indigo-500 text-white flex items-center justify-center font-extrabold shadow-sm">
-              <Zap className="w-4 h-4 fill-white" />
+            <div className="w-9 h-9 rounded-xl overflow-hidden bg-slate-900 border border-slate-200 shadow-sm flex items-center justify-center shrink-0">
+              <img
+                src="/leadflow_logo.jpg"
+                alt="LeadFlow AI Logo"
+                className="w-full h-full object-cover"
+                onError={(e) => {
+                  (e.target as HTMLElement).style.display = 'none';
+                }}
+              />
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <span className="font-extrabold text-slate-900 text-sm tracking-tight">Agent Kashi OS</span>
-                <span className="text-[10px] bg-indigo-50 text-indigo-700 font-bold px-2 py-0.5 rounded-full border border-indigo-200/80">
-                  v3.6 Acquisition Engine
+                <span className="font-extrabold text-slate-900 text-sm tracking-tight">LeadFlow AI OS</span>
+                <span className="text-[10px] bg-indigo-600 text-white font-extrabold px-2.5 py-0.5 rounded-full shadow-xs">
+                  v2.0 Enterprise Architecture
                 </span>
               </div>
               <p className="text-xs text-slate-500 font-medium">
@@ -823,7 +1230,16 @@ export default function App() {
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 sm:gap-3">
+            <button
+              onClick={() => setActiveTab('settings')}
+              className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200/80 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-xs"
+              title="Firebase Cloud Database & Google Cloud Platform Console"
+            >
+              <Cloud className="w-3.5 h-3.5 text-indigo-600" />
+              <span className="hidden sm:inline">Firebase Cloud</span>
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+            </button>
             <button
               onClick={() => setIsDebugOpen(!isDebugOpen)}
               className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-xs"
@@ -839,11 +1255,15 @@ export default function App() {
         <ApiBanner onConfigureKeys={() => setActiveTab('settings')} />
 
         {/* Tab Views */}
+
+        {/* Tab Views - v2.0 Enterprise Architecture */}
         {activeTab === 'dashboard' && (
           <DashboardView
             leads={leads}
             emailsSentCount={outreachLogs.length}
             followupsDueCount={followupLeads.length}
+            logs={outreachLogs}
+            inboundReplies={inboundReplies}
             onNavigateTab={setActiveTab}
             onExportExcel={() => exportLeadsToExcel(leads)}
             onSelectLeadForEmail={(lead) => {
@@ -879,22 +1299,6 @@ export default function App() {
           />
         )}
 
-        {activeTab === 'team_activity' && (
-          <TeamActivityView
-            leads={leads}
-            profile={profile}
-            onOpenAudit={(lead) => {
-              setAuditLead(lead);
-              setIsAuditModalOpen(true);
-            }}
-            onOpenEmail={(lead) => {
-              setEmailLead(lead);
-              setSelectedTemplate(null);
-              setIsEmailModalOpen(true);
-            }}
-          />
-        )}
-
         {activeTab === 'finder' && (
           <FinderView
             existingLeads={leads}
@@ -906,40 +1310,6 @@ export default function App() {
             }}
             suppressedRecords={suppressedRecords}
             onSuppressLead={(lead) => handleSuppressLead(lead, 'Other')}
-          />
-        )}
-
-        {activeTab === 'crm_suite' && (
-          <CrmSuiteView
-            leads={leads}
-            onSelectLead={(lead) => {
-              setEditingLead(lead);
-              setIsLeadModalOpen(true);
-            }}
-            onOpenEmail={(lead) => {
-              setEmailLead(lead);
-              setSelectedTemplate(null);
-              setIsEmailModalOpen(true);
-            }}
-            onOpenLinkedIn={(lead) => {
-              setLinkedInLead(lead);
-              setIsLinkedInModalOpen(true);
-            }}
-          />
-        )}
-
-        {activeTab === 'media_vault' && (
-          <MediaVaultView
-            leads={leads}
-            onOpenAudit={(lead) => {
-              setAuditLead(lead);
-              setIsAuditModalOpen(true);
-            }}
-            onOpenEmail={(lead) => {
-              setEmailLead(lead);
-              setSelectedTemplate(null);
-              setIsEmailModalOpen(true);
-            }}
           />
         )}
 
@@ -982,24 +1352,41 @@ export default function App() {
           />
         )}
 
-        {(activeTab === 'data_sources' || activeTab === 'ai_status') && (
-          <DataSourcesView />
+        {activeTab === 'pipeline' && (
+          <PipelineView
+            leads={leads}
+            onUpdateLeadStatus={handleUpdateLeadStatus}
+            onSelectLead={(lead) => {
+              setEditingLead(lead);
+              setIsLeadModalOpen(true);
+            }}
+          />
         )}
 
-        {activeTab === 'cleanup' && (
-          <CleanupCenterView
+        {activeTab === 'outreach' && (
+          <OutreachTrackerView
+            logs={outreachLogs}
+            scheduledEmails={scheduledEmails}
             leads={leads}
-            trashItems={trashItems}
-            suppressedRecords={suppressedRecords}
-            autoCleanupSettings={autoCleanupSettings}
-            onUpdateLeads={setLeads}
-            onRestoreTrashItem={handleRestoreTrashItem}
-            onPermanentlyDeleteTrashItem={handlePermanentlyDeleteTrashItem}
-            onEmptyTrash={handleEmptyTrash}
-            onUnsuppressRecord={handleUnsuppressRecord}
-            onDeleteAllDemoData={handleDeleteAllDemoData}
-            onUpdateAutoCleanupSettings={setAutoCleanupSettings}
-            onShowToast={showToast}
+            profile={profile}
+            automatedSequences={automatedSequences}
+            onStartSequence={handleStartSequence}
+            onBatchStartSequences={handleBatchStartSequences}
+            onPauseSequence={handlePauseSequence}
+            onResumeSequence={handleResumeSequence}
+            onCancelSequence={handleCancelSequence}
+            onUpdateSequenceStep={handleUpdateSequenceStep}
+            onSendSequenceStepNow={handleSendSequenceStepNow}
+            onDeleteSequence={handleDeleteSequence}
+            onMarkReplied={handleMarkReplied}
+            onSelectLeadForEmail={(lead) => {
+              setEmailLead(lead);
+              setSelectedTemplate(null);
+              setIsEmailModalOpen(true);
+            }}
+            onSendScheduledNow={handleSendScheduledNow}
+            onCancelScheduled={handleCancelScheduled}
+            onRescheduleEmail={handleRescheduleEmail}
           />
         )}
 
@@ -1019,57 +1406,12 @@ export default function App() {
             onMarkReplyRead={handleMarkReplyRead}
             onMarkReplyReplied={handleMarkReplyReplied}
             onLogOutreach={handleLogOutreach}
-            onOpenMeetingsTab={() => setActiveTab('meetings')}
+            onOpenMeetingsTab={() => setActiveTab('inbox')}
             lastPolledAt={lastPolledAt}
             isPolling={isPolling}
             onManualPoll={triggerInboxPolling}
             pollAlert={pollAlert}
             onClearPollAlert={() => setPollAlert(null)}
-          />
-        )}
-
-        {activeTab === 'opportunities' && (
-          <OpportunitiesView
-            leads={leads}
-            onSelectLeadForAudit={(lead) => {
-              setAuditLead(lead);
-              setIsAuditModalOpen(true);
-            }}
-            onSelectLeadForEmail={(lead) => {
-              setEmailLead(lead);
-              setSelectedTemplate(null);
-              setIsEmailModalOpen(true);
-            }}
-          />
-        )}
-
-        {activeTab === 'outreach' && (
-          <OutreachTrackerView
-            logs={outreachLogs}
-            scheduledEmails={scheduledEmails}
-            leads={leads}
-            profile={profile}
-            onMarkReplied={handleMarkReplied}
-            onSelectLeadForEmail={(lead) => {
-              setEmailLead(lead);
-              setSelectedTemplate(null);
-              setIsEmailModalOpen(true);
-            }}
-            onSendScheduledNow={handleSendScheduledNow}
-            onCancelScheduled={handleCancelScheduled}
-            onRescheduleEmail={handleRescheduleEmail}
-          />
-        )}
-
-        {activeTab === 'followups' && (
-          <FollowupsView
-            followupLeads={followupLeads}
-            onSelectLeadForEmail={(lead) => {
-              setEmailLead(lead);
-              setSelectedTemplate(null);
-              setIsEmailModalOpen(true);
-            }}
-            onMarkRepliedDirect={handleMarkRepliedDirect}
           />
         )}
 
@@ -1084,25 +1426,6 @@ export default function App() {
           />
         )}
 
-        {activeTab === 'portfolio' && (
-          <PortfolioView profile={profile} />
-        )}
-
-        {activeTab === 'pipeline' && (
-          <PipelineView
-            leads={leads}
-            onUpdateLeadStatus={handleUpdateLeadStatus}
-            onSelectLead={(lead) => {
-              setEditingLead(lead);
-              setIsLeadModalOpen(true);
-            }}
-          />
-        )}
-
-        {activeTab === 'seo' && (
-          <SeoAgentView />
-        )}
-
         {activeTab === 'analytics' && (
           <AnalyticsView leads={leads} logs={outreachLogs} />
         )}
@@ -1112,7 +1435,29 @@ export default function App() {
             profile={profile}
             onUpdateProfile={setProfile}
             onResetData={handleResetData}
+            leads={leads}
+            currentUser={currentUser}
+            onSignInGoogle={handleSignInGoogle}
+            onSignOut={handleSignOut}
+            onSyncAllToCloud={handleSyncAllToCloud}
+            onPullFromCloud={handlePullFromCloud}
+            isSyncingCloud={isSyncingCloud}
+            cloudSyncStatus={cloudSyncStatus}
           />
+        )}
+
+        {/* Fallback for deprecated or unknown route states */}
+        {!['dashboard', 'kashi_agent', 'finder', 'database', 'pipeline', 'outreach', 'inbox', 'templates', 'analytics', 'settings'].includes(activeTab) && (
+          <div className="bg-white p-6 rounded-2xl border border-slate-200 text-center space-y-4 shadow-sm">
+            <h3 className="font-bold text-slate-900 text-lg">Redirecting to Dashboard...</h3>
+            <p className="text-sm text-slate-500">The selected module has been migrated to v2.0 Enterprise Architecture.</p>
+            <button
+              onClick={() => setActiveTab('dashboard')}
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm rounded-xl transition shadow-xs"
+            >
+              Return to Executive Dashboard
+            </button>
+          </div>
         )}
       </main>
 
