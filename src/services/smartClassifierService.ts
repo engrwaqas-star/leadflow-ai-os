@@ -238,7 +238,7 @@ export function classifyMessageByRules(
   };
 } {
   const combinedText = `${subject} ${message}`.toLowerCase();
-  const matchedTags: SmartIntentTag[] = [];
+  let matchedTags: SmartIntentTag[] = [];
 
   for (const rule of customRules) {
     if (!rule.enabled) continue;
@@ -341,19 +341,25 @@ export function classifyMessageByRules(
     }
   }
 
-  // Sort matched tags by priority & confidence
-  const priorityOrder: Record<string, number> = {
-    CRITICAL_HOT: 4,
-    HIGH: 3,
-    MEDIUM: 2,
-    LOW: 1,
-  };
+  // If an explicit decline / opt-out occurred, it takes precedence as primary tag to safeguard against unwanted outreach
+  const negativeTag = matchedTags.find((t) => t.category === 'Negative');
+  if (negativeTag) {
+    matchedTags = [negativeTag, ...matchedTags.filter((t) => t !== negativeTag)];
+  } else {
+    // Sort matched tags by priority & confidence
+    const priorityOrder: Record<string, number> = {
+      CRITICAL_HOT: 4,
+      HIGH: 3,
+      MEDIUM: 2,
+      LOW: 1,
+    };
 
-  matchedTags.sort((a, b) => {
-    const pDiff = (priorityOrder[b.priority] || 0) - (priorityOrder[a.priority] || 0);
-    if (pDiff !== 0) return pDiff;
-    return b.confidence - a.confidence;
-  });
+    matchedTags.sort((a, b) => {
+      const pDiff = (priorityOrder[b.priority] || 0) - (priorityOrder[a.priority] || 0);
+      if (pDiff !== 0) return pDiff;
+      return b.confidence - a.confidence;
+    });
+  }
 
   const primaryTag = matchedTags[0];
 
