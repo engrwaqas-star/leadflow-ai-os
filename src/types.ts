@@ -312,6 +312,7 @@ export interface Lead {
   archiveReason?: CleanupReason;
   trashReason?: CleanupReason;
   recordStatus?: LeadRecordStatus;
+  updatedAt?: string;
 }
 
 export interface TrashItem {
