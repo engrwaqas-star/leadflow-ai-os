@@ -33,7 +33,7 @@ export function formatLeadsForExport(leads: Lead[]): Record<string, any>[] {
     'Industry': sanitizeCellValue(l.industry),
     'Country': sanitizeCellValue(l.country),
     'City': sanitizeCellValue(l.city || ''),
-    'Pipeline Stage': sanitizeCellValue(l.stage || determineLeadStage(l)),
+    'Pipeline Stage': sanitizeCellValue(determineLeadStage(l)),
     'Strategy': l.leadStrategy === 'AGENCY_PARTNERSHIPS' ? 'Agency Partnership' : 'Direct Client',
     'Score': l.score,
     'Temperature': l.temperature,

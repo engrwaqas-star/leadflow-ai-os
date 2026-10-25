@@ -39,9 +39,13 @@ export function determineLeadStage(lead: Partial<Lead>): LeadStage {
   if (lead.contactStatus === 'Replied' || lead.contactStatus === 'Negotiating') return 'REPLIED';
   if (lead.contactStatus === 'Contacted' || lead.contactStatus === 'Follow-Up Due') return 'CONTACTED';
   
-  if (lead.stage === 'OUTREACH_DRAFTED') return 'OUTREACH_DRAFTED';
-  
   const hasDirectContact = Boolean(lead.email && lead.email !== 'Not found' && !lead.email.includes('example.com') && !lead.email.includes('domain.com'));
+
+  if (lead.stage === 'OUTREACH_DRAFTED') return 'OUTREACH_DRAFTED';
+  if (lead.stage === 'OPPORTUNITY_QUALIFIED') {
+    if (hasDirectContact) return 'CONTACT_READY';
+    return 'OPPORTUNITY_QUALIFIED';
+  }
   
   // Audited and has concrete issues or strengths
   if (lead.auditStatus === 'Audited' && lead.auditDetails?.isReachable) {

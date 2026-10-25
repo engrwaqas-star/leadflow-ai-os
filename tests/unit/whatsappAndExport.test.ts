@@ -132,7 +132,7 @@ describe('Excel & CSV Export Data Sanitization', () => {
       // Preserved attributes
       expect(row['Strategy']).toBe('Agency Partnership');
       expect(row['Estimated Budget']).toBe('$3,500 – $6,000');
-      expect(row['Pipeline Stage']).toBe('OPPORTUNITY_QUALIFIED');
+      expect(row['Pipeline Stage']).toBe('CONTACT_READY');
       expect(row['Mobile Viewport']).toBe('Responsive');
       expect(row['Clear CTA']).toBe('No');
       expect(row['Speed Rating']).toBe('Fast');
