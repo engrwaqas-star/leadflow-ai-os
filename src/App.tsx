@@ -150,7 +150,7 @@ export default function App() {
         return {
           ...parsed,
           name: 'Muhammad Waqas',
-          title: 'Full Stack Developer',
+          title: 'Frontend Web Developer',
           email: 'waqasashiq0381@gmail.com',
           portfolioUrl: 'https://muhammadwaqas.dev',
           githubUrl: 'https://github.com/engrwaqas-star',
@@ -161,7 +161,7 @@ export default function App() {
     }
     return {
       name: 'Muhammad Waqas',
-      title: 'Full Stack Developer',
+      title: 'Frontend Web Developer',
       email: 'waqasashiq0381@gmail.com',
       portfolioUrl: 'https://muhammadwaqas.dev',
       githubUrl: 'https://github.com/engrwaqas-star',

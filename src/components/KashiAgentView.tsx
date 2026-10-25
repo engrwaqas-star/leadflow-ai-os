@@ -90,7 +90,7 @@ export const KashiAgentView: React.FC<KashiAgentViewProps> = ({
       recipientEmail: leads[0]?.email || 'info@apexdental.com',
       website: leads[0]?.website || 'apexdental.com',
       subject: `Quick Website Speed & React Rebuild Audit for ${leads[0]?.businessName || 'Apex Dental Care'}`,
-      emailBody: `Hi ${leads[0]?.contactPerson || 'Dr. Smith'},\n\nI noticed your website at ${leads[0]?.website || 'apexdental.com'} is currently experiencing a slow 3.8s load time and missing mobile touch responsiveness.\n\nMy name is ${profile.name}, a Full Stack Developer specializing in React, Node.js, and sub-second PageSpeed optimizations. I built a custom 40-second video walkthrough showing how we can rebuild your booking portal to boost conversions by 45%.\n\nHere is my portfolio: ${profile.portfolioUrl}\n\nWould you be open to a brief 5-minute chat this week?\n\nBest regards,\n${profile.name}\n${profile.title}`,
+      emailBody: `Hi ${leads[0]?.contactPerson || 'Dr. Smith'},\n\nI noticed your website at ${leads[0]?.website || 'apexdental.com'} is currently experiencing a slow 3.8s load time and missing mobile touch responsiveness.\n\nMy name is ${profile.name}, a Frontend Web Developer specializing in React, TypeScript, Tailwind, and sub-second PageSpeed optimizations. I built a custom 40-second video walkthrough showing how we can rebuild your booking portal to boost conversions by 45%.\n\nHere is my portfolio: ${profile.portfolioUrl}\n\nWould you be open to a brief 5-minute chat this week?\n\nBest regards,\n${profile.name}\n${profile.title}`,
       sentAt: `${todayDateStr} 08:30 AM`,
       skillsHighlighted: ['React 18', 'Sub-second PageSpeed (99/100)', 'Mobile Responsive Layout'],
       status: 'Replied',
@@ -102,9 +102,9 @@ export const KashiAgentView: React.FC<KashiAgentViewProps> = ({
       recipientEmail: leads[1]?.email || 'contact@elitelegal.com',
       website: leads[1]?.website || 'elitelegal.com',
       subject: `Mobile Layout Fix & Automated Client Booking Portal`,
-      emailBody: `Hi ${leads[1]?.contactPerson || 'Sarah'},\n\nWhile reviewing legal consult portals in your area, I audited ${leads[1]?.website || 'elitelegal.com'}. I noticed your main contact buttons break on mobile screens.\n\nAs a Full Stack Developer (${profile.name}), I build high-converting mobile web apps with automated WhatsApp lead routers.\n\nI can fix these mobile bottlenecks in 48 hours. Let me know if you'd like to see a free prototype!\n\nBest,\n${profile.name}`,
+      emailBody: `Hi ${leads[1]?.contactPerson || 'Sarah'},\n\nWhile reviewing legal consult portals in your area, I audited ${leads[1]?.website || 'elitelegal.com'}. I noticed your main contact buttons break on mobile screens.\n\nAs a Frontend Web Developer (${profile.name}), I build high-converting mobile web apps with automated WhatsApp lead routers.\n\nI can fix these mobile bottlenecks in 48 hours. Let me know if you'd like to see a free prototype!\n\nBest,\n${profile.name}`,
       sentAt: `${todayDateStr} 07:15 AM`,
-      skillsHighlighted: ['Mobile Touch Layout', 'WhatsApp Lead Router', 'Full Stack Express Backend'],
+      skillsHighlighted: ['Mobile Touch Layout', 'WhatsApp Lead Router', 'React Frontend'],
       status: 'Opened',
     },
     {
@@ -128,7 +128,7 @@ export const KashiAgentView: React.FC<KashiAgentViewProps> = ({
     {
       id: 'work-1',
       employeeName: 'Muhammad Waqas',
-      role: 'Lead Full Stack Architect',
+      role: 'Frontend Web Developer',
       taskTitle: 'Sub-second React App Migration & Core Web Vitals Optimization',
       clientName: leads[0]?.businessName || 'Apex Dental Care',
       completedAt: todayDateStr,
@@ -168,7 +168,7 @@ export const KashiAgentView: React.FC<KashiAgentViewProps> = ({
   // Modal State for Adding Completed Work
   const [isAddWorkOpen, setIsAddWorkOpen] = useState(false);
   const [workEmpName, setWorkEmpName] = useState('Muhammad Waqas');
-  const [workRole, setWorkRole] = useState('Lead Full Stack Architect');
+  const [workRole, setWorkRole] = useState('Frontend Web Developer');
   const [workTaskTitle, setWorkTaskTitle] = useState('');
   const [workClientName, setWorkClientName] = useState(leads[0]?.businessName || 'Client Project');
   const [workHours, setWorkHours] = useState(4);

@@ -249,7 +249,7 @@ export const PipelineView: React.FC<PipelineViewProps> = ({
 
                         {lead.skillGaps && lead.skillGaps.length > 0 && (
                           <div className="text-[9px] text-rose-700 font-extrabold bg-rose-50 px-1.5 py-0.5 rounded border border-rose-200">
-                            SKILL GAP: {lead.skillGaps.join(', ')}
+                            SKILL GAP — VERIFY BEFORE OUTREACH: {lead.skillGaps.join(', ')}
                           </div>
                         )}
 
@@ -265,7 +265,7 @@ export const PipelineView: React.FC<PipelineViewProps> = ({
                         <div className="flex items-center justify-between pt-1.5 border-t border-slate-200 text-[11px]">
                           <span className="font-black text-emerald-800 flex items-center gap-0.5 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
                             <DollarSign className="w-3 h-3 text-emerald-600" />
-                            {lead.estimatedBudget ? lead.estimatedBudget : `$${dealVal.toLocaleString()}`}
+                            {lead.estimatedBudget ? lead.estimatedBudget : 'Scope Pending'}
                           </span>
 
                           {/* Quick Stage Move Dropdown */}
