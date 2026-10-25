@@ -1,25 +1,59 @@
 import * as XLSX from 'xlsx';
 import { Lead } from '../types';
+import { determineLeadStage } from './leadPipeline';
 
-export function exportLeadsToExcel(leads: Lead[], filename = 'LeadFlow_Leads.xlsx') {
-  const data = leads.map(l => ({
-    'Business Name': l.businessName,
-    'Contact Person': l.contactPerson,
-    'Email': l.email,
-    'Phone': l.phone,
-    'Website': l.website,
-    'Industry': l.industry,
-    'Country': l.country,
+/**
+ * Sanitizes cell values to prevent CSV / Excel Formula Injection (CSV Injection / DDE attack).
+ * If a string begins with '=', '+', '-', or '@', it is escaped with a leading single quote.
+ */
+export function sanitizeCellValue(value: any): any {
+  if (typeof value !== 'string') return value;
+  const trimmed = value.trim();
+  if (
+    trimmed.startsWith('=') ||
+    trimmed.startsWith('+') ||
+    trimmed.startsWith('-') ||
+    trimmed.startsWith('@')
+  ) {
+    return `'${value}`;
+  }
+  return value;
+}
+
+/**
+ * Maps Lead objects to clean, sanitized row records for spreadsheet export.
+ */
+export function formatLeadsForExport(leads: Lead[]): Record<string, any>[] {
+  return leads.map((l) => ({
+    'Business Name': sanitizeCellValue(l.businessName),
+    'Contact Person': sanitizeCellValue(l.contactPerson),
+    'Email': sanitizeCellValue(l.email),
+    'Phone': sanitizeCellValue(l.phone),
+    'Website': sanitizeCellValue(l.website),
+    'Industry': sanitizeCellValue(l.industry),
+    'Country': sanitizeCellValue(l.country),
+    'City': sanitizeCellValue(l.city || ''),
+    'Pipeline Stage': sanitizeCellValue(l.stage || determineLeadStage(l)),
+    'Strategy': l.leadStrategy === 'AGENCY_PARTNERSHIPS' ? 'Agency Partnership' : 'Direct Client',
     'Score': l.score,
     'Temperature': l.temperature,
-    'Contact Status': l.contactStatus,
-    'Website Status': l.websiteStatus,
-    'Suggested Service': l.suggestedService,
-    'Audit Flaw': l.auditIssue,
-    'Pitch Hook': l.pitchHook,
-    'Last Contact': l.lastContactDate || '',
-    'Notes': l.notes || ''
+    'Estimated Budget': sanitizeCellValue(l.estimatedBudget || 'Unverified'),
+    'Contact Status': sanitizeCellValue(l.contactStatus),
+    'Audit Status': l.auditStatus || 'Pending',
+    'Audit Issue': sanitizeCellValue(l.auditIssue),
+    'Speed Rating': l.speedRating || 'Average',
+    'Mobile Viewport': l.mobileViewport ? 'Responsive' : 'Missing',
+    'Clear CTA': l.clearCTA ? 'Yes' : 'No',
+    'Skill Gaps': sanitizeCellValue(l.skillGaps?.join(', ') || 'None'),
+    'Suggested Service': sanitizeCellValue(l.suggestedService),
+    'Pitch Hook': sanitizeCellValue(l.pitchHook),
+    'Last Contact': sanitizeCellValue(l.lastContactDate || ''),
+    'Notes': sanitizeCellValue(l.notes || ''),
   }));
+}
+
+export function exportLeadsToExcel(leads: Lead[], filename = 'LeadFlow_Leads.xlsx') {
+  const data = formatLeadsForExport(leads);
 
   const worksheet = XLSX.utils.json_to_sheet(data);
   const workbook = XLSX.utils.book_new();
