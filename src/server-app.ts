@@ -21,16 +21,16 @@ app.use((req, res, next) => {
   const openrouterKey = req.headers["x-openrouter-key"] as string;
   const googlePlacesKey = req.headers["x-google-places-key"] as string;
 
-  if (serpKey && !process.env.SERPAPI_API_KEY) {
+  if (serpKey) {
     process.env.SERPAPI_API_KEY = serpKey.trim();
   }
-  if (geminiKey && !process.env.GEMINI_API_KEY) {
+  if (geminiKey) {
     process.env.GEMINI_API_KEY = geminiKey.trim();
   }
-  if (openrouterKey && !process.env.OPENROUTER_API_KEY) {
+  if (openrouterKey) {
     process.env.OPENROUTER_API_KEY = openrouterKey.trim();
   }
-  if (googlePlacesKey && !process.env.GOOGLE_PLACES_API_KEY) {
+  if (googlePlacesKey) {
     process.env.GOOGLE_PLACES_API_KEY = googlePlacesKey.trim();
   }
   next();
