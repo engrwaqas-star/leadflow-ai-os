@@ -13,6 +13,7 @@ export interface LeadQueryParams {
   keyword?: string;
   providerId?: string;
   leadStrategy?: 'DIRECT_CLIENTS' | 'AGENCY_PARTNERSHIPS';
+  limit?: number;
 }
 
 export interface FieldVerification {
@@ -35,6 +36,11 @@ export interface DiscoveredLeadRaw {
   city?: string;
   country?: string;
   industry?: string;
+  placeId?: string;
+  rating?: number | null;
+  reviews?: number | null;
+  price?: string;
+  category?: string;
   score?: number; // Qualification / Opportunity Score (0-100)
   qualificationScore?: number; // Canonical qualification score
   verificationScore?: number; // Verification Score (0-100)
@@ -42,6 +48,7 @@ export interface DiscoveredLeadRaw {
   rejectionReason?: string;
   temperature?: string;
   websiteStatus?: string;
+  auditStatus?: 'Pending' | 'Audited' | 'Critical Issues';
   suggestedService?: string;
   auditIssue?: string;
   pitchHook?: string;
@@ -50,6 +57,7 @@ export interface DiscoveredLeadRaw {
   verificationStatus: "VERIFIED" | "UNVERIFIED" | "REJECTED";
   dateDiscovered?: string;
   evidenceText?: string;
+  missingFields?: string[];
 }
 
 export interface ProviderSearchResult {
@@ -66,6 +74,13 @@ export interface ProviderSearchResult {
   duplicatesRemovedCount?: number;
   suppressedCount?: number;
   finalActiveCount?: number;
+  targetLimit?: number;
+  missingFieldsSummary?: {
+    missingWebsite: number;
+    missingPhone: number;
+    missingEmail: number;
+    missingContactPerson: number;
+  };
   searchParamsUsed?: LeadQueryParams;
 }
 
@@ -185,6 +200,9 @@ const INVALID_NAME_PATTERNS = [
   "unknown",
   "test business",
   "sample company",
+  "sample co",
+  "sample corp",
+  "demo co",
   "demo business",
   "placeholder business",
 ];
@@ -307,9 +325,11 @@ export function verifyAndNormalizeLead(
   const hasPhone = cleanPhone !== "Not found";
   const hasEmail = cleanEmail !== "Not found";
   const hasSource = Boolean(cleanSourceUrl);
+  const hasPlaceId = Boolean(raw.placeId);
+  const hasLocation = Boolean(raw.address || raw.city || queryContext?.city);
 
   // Hard Rule: A lead with no real company name + no source + no website + no contact information MUST be rejected from Live Mode.
-  if (!hasWebsite && !hasPhone && !hasEmail && !hasSource) {
+  if (!hasWebsite && !hasPhone && !hasEmail && !hasSource && !hasPlaceId) {
     return {
       lead: {
         ...raw,
@@ -330,7 +350,7 @@ export function verifyAndNormalizeLead(
   // 4. Compute Field Verification Flags
   const fieldVerification: FieldVerification = {
     companyNameVerified: true,
-    locationVerified: Boolean(raw.address || raw.city || raw.country),
+    locationVerified: hasLocation,
     industryVerified: Boolean(raw.industry),
     websiteVerified: hasWebsite,
     phoneVerified: hasPhone,
@@ -338,19 +358,27 @@ export function verifyAndNormalizeLead(
     contactPersonVerified: cleanContactPerson !== "Not found",
   };
 
-  // 5. Compute Verification Score (0-100)
+  // Missing fields list for honest visibility
+  const missingFields: string[] = [];
+  if (!hasWebsite) missingFields.push("website");
+  if (!hasPhone) missingFields.push("phone");
+  if (!hasEmail) missingFields.push("email");
+  if (cleanContactPerson === "Not found") missingFields.push("contactPerson");
+
+  // 5. Verification Status & Score (Honest Provider-Sourced Verification)
+  // A business is VERIFIED if it has genuine provider-sourced provenance (Place ID or source URL with location/contact).
+  const isVerified = hasPlaceId || (hasSource && (hasLocation || hasPhone || hasWebsite));
+  const verificationStatus: "VERIFIED" | "UNVERIFIED" | "REJECTED" = isVerified ? "VERIFIED" : "UNVERIFIED";
+
   let verificationScore = 30; // Real non-placeholder company name (+30)
-  if (hasSource) verificationScore += 25;
+  if (hasPlaceId) verificationScore += 30;
+  else if (hasSource) verificationScore += 20;
   if (fieldVerification.locationVerified) verificationScore += 20;
-  if (fieldVerification.industryVerified) verificationScore += 15;
-  if (hasWebsite) verificationScore += 10;
+  if (fieldVerification.industryVerified) verificationScore += 10;
+  if (hasWebsite) verificationScore += 5;
   if (hasPhone) verificationScore += 5;
-  if (hasEmail) verificationScore += 5;
 
   verificationScore = Math.min(100, verificationScore);
-
-  const isVerified = verificationScore >= 80;
-  const verificationStatus: "VERIFIED" | "UNVERIFIED" | "REJECTED" = isVerified ? "VERIFIED" : "UNVERIFIED";
 
   const normalizedLead: DiscoveredLeadRaw = {
     ...raw,
@@ -366,9 +394,13 @@ export function verifyAndNormalizeLead(
     verificationScore,
     fieldVerification,
     verificationStatus,
-    rejectionReason: isVerified ? undefined : `Verification score (${verificationScore}/100) below threshold (80)`,
+    missingFields,
+    auditStatus: raw.auditStatus || "Pending",
+    rejectionReason: isVerified ? undefined : "Unverified: lacks provider-sourced Place ID or physical address proof",
     websiteStatus: hasWebsite ? "Active Website Recorded" : "No Website Listed",
-    evidenceText: `Verified business identity (${verificationScore}/100 verification score) via ${raw.source || "SerpApi"}.`,
+    evidenceText: raw.evidenceText || (hasPlaceId
+      ? `Verified Google Maps local business listing (Place ID: ${raw.placeId}).`
+      : `Discovered business listing via ${raw.source || "SerpApi"}.`),
   };
 
   return { lead: normalizedLead, isVerified, reason: normalizedLead.rejectionReason };
@@ -727,6 +759,107 @@ export class GooglePlacesProvider implements LeadProvider {
 }
 
 /**
+ * Clean Local Business Category Query Builder
+ * Strips developer sales jargon and ensures clean Google Maps query formulation.
+ */
+export function buildGoogleMapsLocalQuery(query: LeadQueryParams): {
+  primaryQuery: string;
+  expandedQueries: string[];
+  cleanCategory: string;
+} {
+  const { industry = '', keyword = '', city = '', country = '' } = query;
+
+  // Internal sales phrases to strip
+  const salesPhrases = [
+    /\$2,000\+\s*client\s*projects/gi,
+    /website\s*redesign\s*&\s*modernization/gi,
+    /startup\s*mvp\s*frontend/gi,
+    /custom\s*web\s*portal\s*&\s*dashboard/gi,
+    /mobile\s*performance\s*&\s*speed\s*fix/gi,
+    /frontend\s*subcontracting\s*\/\s*contract/gi,
+    /\$2,000\+\s*target/gi,
+    /react\s*\/\s*typescript\s*\/\s*tailwind/gi,
+  ];
+
+  let cleanedIndustry = industry;
+  for (const pattern of salesPhrases) {
+    cleanedIndustry = cleanedIndustry.replace(pattern, ' ');
+  }
+  cleanedIndustry = cleanedIndustry.replace(/\s+/g, ' ').trim();
+
+  let cleanedKeyword = keyword;
+  for (const pattern of salesPhrases) {
+    cleanedKeyword = cleanedKeyword.replace(pattern, ' ');
+  }
+  cleanedKeyword = cleanedKeyword.replace(/\s+/g, ' ').trim();
+
+  // If industry is "Local Service Businesses" or generic without keyword, use default or keyword
+  if (cleanedIndustry.toLowerCase() === 'local service businesses' && cleanedKeyword) {
+    cleanedIndustry = cleanedKeyword;
+  } else if (!cleanedIndustry && cleanedKeyword) {
+    cleanedIndustry = cleanedKeyword;
+  } else if (!cleanedIndustry && !cleanedKeyword) {
+    cleanedIndustry = 'businesses';
+  }
+
+  // Combine category and keyword sensibly
+  let mainTerm = cleanedIndustry;
+  if (cleanedKeyword && !mainTerm.toLowerCase().includes(cleanedKeyword.toLowerCase())) {
+    mainTerm = `${mainTerm} ${cleanedKeyword}`;
+  }
+  mainTerm = mainTerm.trim();
+
+  const locationParts = [city?.trim(), country?.trim()].filter(Boolean);
+  const locationStr = locationParts.join(', ');
+
+  const primaryQuery = locationStr ? `${mainTerm} in ${locationStr}` : mainTerm;
+
+  // Bounded Category Expansions for local categories
+  const expandedQueries: string[] = [];
+  const lowerMain = mainTerm.toLowerCase();
+
+  const expansionsMap: Record<string, string[]> = {
+    salon: ['hair salon', 'beauty salon', 'barber shop'],
+    dental: ['dentist', 'dental clinic', 'orthodontist'],
+    dentist: ['dental clinic', 'family dentist', 'cosmetic dentistry'],
+    restaurant: ['cafes', 'bistros', 'bakeries'],
+    agency: ['digital marketing agency', 'web design agency', 'advertising agency'],
+    clinic: ['medical clinic', 'health center', 'urgent care'],
+    plumber: ['plumbing services', 'emergency plumber'],
+    gym: ['fitness center', 'crossfit', 'yoga studio'],
+    realty: ['real estate agency', 'property management'],
+    lawyer: ['law firm', 'attorney at law', 'legal services'],
+  };
+
+  for (const [key, related] of Object.entries(expansionsMap)) {
+    if (lowerMain.includes(key)) {
+      for (const rel of related) {
+        if (!lowerMain.includes(rel)) {
+          const expQuery = locationStr ? `${rel} in ${locationStr}` : rel;
+          expandedQueries.push(expQuery);
+        }
+      }
+      break;
+    }
+  }
+
+  return { primaryQuery, expandedQueries: expandedQueries.slice(0, 2), cleanCategory: mainTerm };
+}
+
+/**
+ * Helper to extract city from Google Maps formatted address if city was omitted
+ */
+export function extractCityFromAddress(address?: string): string {
+  if (!address) return '';
+  const parts = address.split(',').map((s) => s.trim());
+  if (parts.length >= 3) {
+    // e.g. "123 Main St, Austin, TX 78701, USA" -> parts[1] is Austin
+    return parts[1];
+  }
+  return parts[0] || '';
+}
+
+/**
  * 1. SerpApi Google & Maps Search Provider (PRIMARY LIVE LEAD PROVIDER)
  */
 export class SerpApiSearchProvider implements LeadProvider {
@@ -782,28 +915,183 @@ export class SerpApiSearchProvider implements LeadProvider {
       };
     }
 
-    const { country, city, industry, keyword, opportunityType, service, targetService, problemFocus } = query;
     const apiKey = process.env.SERPAPI_API_KEY!.trim();
+    const targetLimit = Math.min(100, Math.max(1, Number(query.limit) || 20));
 
     try {
-      // Form query dynamically adapting to city, country, industry, and service
-      const requestedService = service || targetService || "";
-      const baseTerms = [industry, requestedService, keyword, opportunityType, problemFocus].filter(Boolean).join(" ");
-      const locationParts = [city, country].filter(Boolean).join(", ");
-      const fullQuery = locationParts ? `${baseTerms || "businesses"} in ${locationParts}` : baseTerms || "businesses";
+      // Clean query formulation - strips internal developer sales boilerplate
+      const { primaryQuery, expandedQueries, cleanCategory } = buildGoogleMapsLocalQuery(query);
+      const queriesToTry = [primaryQuery, ...expandedQueries];
 
-      const url = `https://serpapi.com/search.json?engine=google_maps&q=${encodeURIComponent(fullQuery)}&api_key=${apiKey}`;
-      const response = await fetch(url);
+      const rawItemsCollected: DiscoveredLeadRaw[] = [];
+      const seenPlaceIds = new Set<string>();
+      const seenKeys = new Set<string>();
+      let totalRaw = 0;
+      let duplicatesRemoved = 0;
+      let rejectedCount = 0;
+      let requestCount = 0;
+      const MAX_REQUESTS = 6; // Cap requests to avoid quota burn and latency spikes
 
-      if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(`SerpApi search request failed (${response.status}): ${errText}`);
+      // Pagination & query loop
+      for (const term of queriesToTry) {
+        if (rawItemsCollected.length >= targetLimit || requestCount >= MAX_REQUESTS) break;
+
+        for (let start = 0; start < 100; start += 20) {
+          if (rawItemsCollected.length >= targetLimit || requestCount >= MAX_REQUESTS) break;
+
+          requestCount++;
+          const url = `https://serpapi.com/search.json?engine=google_maps&q=${encodeURIComponent(term)}&start=${start}&api_key=${apiKey}`;
+
+          let response: globalThis.Response;
+          try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 12000);
+            response = await fetch(url, { signal: controller.signal });
+            clearTimeout(timeoutId);
+          } catch (fetchErr: any) {
+            console.error(`SerpApi request failed for term "${term}" (start=${start}):`, fetchErr);
+            break; // Stop paging this term if request timed out or network failed
+          }
+
+          if (response.status === 401) {
+            updateProviderHealth(this.id, { status: "Unauthorized" });
+            return {
+              success: false,
+              leads: [],
+              provider: this.name,
+              providerId: this.id,
+              statusCode: 401,
+              error: "SerpApi API key is invalid or unauthorized.",
+              code: "SERPAPI_UNAUTHORIZED",
+              searchParamsUsed: query,
+            };
+          }
+
+          if (response.status === 429) {
+            updateProviderHealth(this.id, { status: "Rate Limited" });
+            return {
+              success: false,
+              leads: [],
+              provider: this.name,
+              providerId: this.id,
+              statusCode: 429,
+              error: "SerpApi account search quota exceeded.",
+              code: "SERPAPI_QUOTA_EXCEEDED",
+              searchParamsUsed: query,
+            };
+          }
+
+          if (!response.ok) {
+            const errText = await response.text();
+            throw new Error(`SerpApi search request failed (${response.status}): ${errText}`);
+          }
+
+          const data = await response.json();
+          const localResults: any[] = data.local_results || data.organic_results || [];
+          totalRaw += localResults.length;
+
+          if (localResults.length === 0) {
+            // No more results for this query term
+            break;
+          }
+
+          for (const item of localResults) {
+            if (rawItemsCollected.length >= targetLimit) break;
+
+            const title = (item.title || item.name || "").trim();
+            if (isPlaceholderName(title)) {
+              rejectedCount++;
+              continue;
+            }
+
+            const placeId = item.place_id || item.data_id || item.data_cid || "";
+            const cleanWebsite = (item.website || item.link || "").trim();
+            const phone = (item.phone || item.phone_number || "").trim();
+            const address = (item.address || item.formatted_address || "").trim();
+            const itemCategory = item.type || (Array.isArray(item.types) ? item.types[0] : "") || item.category || cleanCategory;
+
+            // Stable Deduplication
+            const stableId = placeId ? `place:${placeId}` : "";
+            const secondaryKey = `${title.toLowerCase()}|${(address || phone || cleanWebsite).toLowerCase().replace(/[^a-z0-9]/g, "")}`;
+
+            if ((stableId && seenPlaceIds.has(stableId)) || seenKeys.has(secondaryKey)) {
+              duplicatesRemoved++;
+              continue;
+            }
+
+            if (stableId) seenPlaceIds.add(stableId);
+            seenKeys.add(secondaryKey);
+
+            // Verified source URL with Google Maps place link
+            const sourceUrl = item.link || item.serpapi_link || (placeId
+              ? `https://www.google.com/maps/place/?q=place_id:${placeId}`
+              : (cleanWebsite || `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(title)}`));
+
+            const rating = typeof item.rating === 'number' ? item.rating : (parseFloat(item.rating) || null);
+            const reviews = typeof item.reviews === 'number' ? item.reviews : (parseInt(item.reviews, 10) || null);
+            const finalWebsite = (cleanWebsite && !isPlaceholderDomain(cleanWebsite)) ? cleanWebsite : "Not found";
+            const finalPhone = (phone && phone.toLowerCase() !== "not found" && phone.toLowerCase() !== "n/a") ? phone : "Not found";
+
+            const missingFields: string[] = [];
+            if (finalWebsite === "Not found") missingFields.push("website");
+            if (finalPhone === "Not found") missingFields.push("phone");
+            missingFields.push("email"); // Google Maps does not list personal emails
+            missingFields.push("contactPerson"); // Google Maps does not list individual owner names
+
+            const leadObj: DiscoveredLeadRaw = {
+              businessName: title,
+              contactPerson: "Not found",
+              email: "Not found",
+              phone: finalPhone,
+              website: finalWebsite,
+              address: address || "",
+              city: query.city || extractCityFromAddress(address) || "Local",
+              country: query.country || "USA",
+              industry: itemCategory,
+              category: itemCategory,
+              placeId: placeId || undefined,
+              rating,
+              reviews,
+              price: item.price || "",
+              source: "SerpApi Google Maps",
+              sourceUrl,
+              verificationStatus: "VERIFIED",
+              verificationScore: (placeId && address) ? 95 : 85,
+              dateDiscovered: new Date().toISOString(),
+              evidenceText: `Verified local Google Maps business listing via SerpApi (Place ID: ${placeId || "N/A"}, Rating: ${rating || "N/A"}, Reviews: ${reviews || 0}).`,
+              missingFields,
+              fieldVerification: {
+                companyNameVerified: true,
+                locationVerified: Boolean(address || query.city),
+                industryVerified: Boolean(itemCategory),
+                websiteVerified: finalWebsite !== "Not found",
+                phoneVerified: finalPhone !== "Not found",
+                emailVerified: false,
+                contactPersonVerified: false,
+              },
+              websiteStatus: finalWebsite !== "Not found" ? "Active Website Recorded" : "No Website Listed",
+              auditStatus: "Pending",
+              suggestedService: "Responsive Business Frontend & Modernization",
+              auditIssue: "Technical website audit pending live inspection",
+              pitchHook: `I came across ${title} on Google Maps and wanted to share a few frontend observations for your online presence.`,
+            };
+
+            rawItemsCollected.push(leadObj);
+          }
+
+          if (rawItemsCollected.length >= targetLimit) {
+            break;
+          }
+
+          // If the page had fewer than 20 results, Google Maps has no further results for this term
+          if (localResults.length < 20) {
+            break;
+          }
+        }
       }
 
-      const data = await response.json();
-      const localResults: any[] = data.local_results || data.organic_results || [];
-
-      if (localResults.length === 0) {
+      // If zero results, return empty state with honest statistics (NEVER invent fake leads!)
+      if (rawItemsCollected.length === 0) {
         updateProviderHealth(this.id, { status: "Connected", lastSuccessfulSearch: new Date().toISOString() });
         return {
           success: true,
@@ -813,64 +1101,29 @@ export class SerpApiSearchProvider implements LeadProvider {
           statusCode: 200,
           rawCount: 0,
           validatedCount: 0,
-          rejectedCount: 0,
+          rejectedCount,
+          duplicatesRemovedCount: duplicatesRemoved,
+          targetLimit,
+          missingFieldsSummary: {
+            missingWebsite: 0,
+            missingPhone: 0,
+            missingEmail: 0,
+            missingContactPerson: 0,
+          },
           searchParamsUsed: query,
         };
       }
 
-      // Step 1: Map raw items with ZERO synthetic placeholders
-      const rawLeads: DiscoveredLeadRaw[] = localResults.slice(0, 15).map((item: any) => {
-        const title = item.title || item.name || "";
-        const cleanWebsite = item.website || item.link || "";
-        const phone = item.phone || item.phone_number || "";
-        const address = item.address || item.formatted_address || "";
-        const itemCategory = item.type || item.category || industry || "Business";
-        
-        const sourceUrl = item.link || item.serpapi_link || (item.place_id 
-          ? `https://www.google.com/maps/place/?q=place_id:${item.place_id}` 
-          : (cleanWebsite || `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(title)}`));
+      // Step 2: Pass through Agent Kashi Opportunity Qualification (0-100 rubric for Muhammad Waqas)
+      const qualifiedLeads = await qualifyLeadsWithKashi(rawItemsCollected, query);
 
-        return {
-          businessName: title,
-          contactPerson: "Not found",
-          email: "Not found",
-          phone: phone || "Not found",
-          website: cleanWebsite || "Not found",
-          address: address || "",
-          city: city || item.city || "Local",
-          country: country || item.country || "USA",
-          industry: itemCategory,
-          source: "SerpApi Google Maps",
-          sourceUrl,
-          verificationStatus: "UNVERIFIED",
-          dateDiscovered: new Date().toISOString(),
-          evidenceText: `Verified local Google Maps record via SerpApi (Place ID: ${item.place_id || "N/A"}, Reviews: ${item.reviews || 0}, Rating: ${item.rating || "N/A"}).`,
-        };
-      });
-
-      // Step 2: Field Verification & Pipeline Filtering (Deduplicate + Filter Fake domains)
-      let rejectedCount = 0;
-      const verifiedLeads: DiscoveredLeadRaw[] = [];
-      const seenKeys = new Set<string>();
-
-      for (const raw of rawLeads) {
-        const dedupeKey = (raw.businessName + (raw.website || raw.phone || raw.address || "")).toLowerCase().replace(/[^a-z0-9]/g, "");
-        if (seenKeys.has(dedupeKey)) {
-          rejectedCount++;
-          continue;
-        }
-        seenKeys.add(dedupeKey);
-
-        const { lead, isVerified } = verifyAndNormalizeLead(raw, query);
-        if (isVerified) {
-          verifiedLeads.push(lead);
-        } else {
-          rejectedCount++;
-        }
-      }
-
-      // Step 3: Only pass VERIFIED leads to AI qualification
-      const qualifiedLeads = await qualifyLeadsWithKashi(verifiedLeads, query);
+      // Step 3: Compute Missing Fields Summary for transparent visibility
+      const missingFieldsSummary = {
+        missingWebsite: qualifiedLeads.filter((l) => !l.website || l.website === "Not found").length,
+        missingPhone: qualifiedLeads.filter((l) => !l.phone || l.phone === "Not found").length,
+        missingEmail: qualifiedLeads.length, // All Google Maps leads lack email by provider design
+        missingContactPerson: qualifiedLeads.length, // All Google Maps leads lack personal executive names
+      };
 
       updateProviderHealth(this.id, { status: "Connected", lastSuccessfulSearch: new Date().toISOString() });
 
@@ -880,9 +1133,12 @@ export class SerpApiSearchProvider implements LeadProvider {
         provider: this.name,
         providerId: this.id,
         statusCode: 200,
-        rawCount: localResults.length,
+        rawCount: totalRaw,
         validatedCount: qualifiedLeads.length,
         rejectedCount,
+        duplicatesRemovedCount: duplicatesRemoved,
+        targetLimit,
+        missingFieldsSummary,
         searchParamsUsed: query,
       };
     } catch (err: any) {

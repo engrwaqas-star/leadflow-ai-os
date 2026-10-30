@@ -44,6 +44,7 @@ import {
   ValueEstimate
 } from '../utils/leadPipeline';
 import { DataSourceConfigModal } from './DataSourceConfigModal';
+import { exportLeadsToExcel } from '../utils/excel';
 
 interface FinderViewProps {
   onImportLead: (lead: Omit<Lead, 'id' | 'createdAt'>) => void;
@@ -67,8 +68,9 @@ export const FinderView: React.FC<FinderViewProps> = ({
 
   // Search Parameters - Free-form & non-restrictive
   const [country, setCountry] = useState('USA');
-  const [industry, setIndustry] = useState('SaaS & AI Startups');
-  const [city, setCity] = useState('');
+  const [industry, setIndustry] = useState('Salons');
+  const [city, setCity] = useState('Austin');
+  const [requestedLimit, setRequestedLimit] = useState<number>(20);
   const [opportunityType, setOpportunityType] = useState('$2,000+ Client Projects');
   const [companyStage, setCompanyStage] = useState('All Stages');
   const [budgetTarget, setBudgetTarget] = useState('$2,000+ Target');
@@ -80,11 +82,19 @@ export const FinderView: React.FC<FinderViewProps> = ({
   const [discoveredLeads, setDiscoveredLeads] = useState<any[]>([]);
   const [hasExecutedSearch, setHasExecutedSearch] = useState(false);
   const [searchSummary, setSearchSummary] = useState<{
+    requestedCount: number;
     rawCount: number;
     newCount: number;
     duplicateCount: number;
     suppressedCount: number;
     finalActive: number;
+    source: string;
+    missingFields?: {
+      missingWebsite: number;
+      missingPhone: number;
+      missingEmail: number;
+      missingContactPerson: number;
+    };
   } | null>(null);
 
   const [importedIds, setImportedIds] = useState<Record<string, boolean>>({});
@@ -96,8 +106,8 @@ export const FinderView: React.FC<FinderViewProps> = ({
   const [keysDiagnostic, setKeysDiagnostic] = useState<any>(null);
   const [testingKeys, setTestingKeys] = useState(false);
 
-  // Parameterized Search Cache (Key: country|city|industry|oppType|budget|keyword)
-  const [searchCache, setSearchCache] = useState<Record<string, { leads: any[]; summary: any }>>({});
+  // Parameterized Search Cache (Key: provider|country|city|industry|keyword|limit)
+  const [searchCache, setSearchCache] = useState<Record<string, { leads: any[]; summary: any; timestamp: number }>>({});
 
   // Modal States
   const [activeScoreModal, setActiveScoreModal] = useState<{ lead: any; scoreData: ScoreBreakdown } | null>(null);
@@ -133,36 +143,46 @@ export const FinderView: React.FC<FinderViewProps> = ({
     runKeysDiagnostic();
   }, [selectedProviderId]);
 
-  const handleSearch = async () => {
+  const handleSearch = async (forceRefresh = false) => {
     setLoading(true);
     setApiError(null);
     setDiscoveredLeads([]);
     setSearchSummary(null);
     setHasExecutedSearch(true);
 
-    const cacheKey = `${selectedProviderId}|${country}|${city.trim().toLowerCase() || 'all'}|${industry}|${opportunityType}|${budgetTarget}|${keyword}`;
+    const cleanCity = city.trim();
+    const cleanCountry = country.trim();
+    const cleanIndustry = industry.trim();
+    const cleanKeyword = keyword.trim();
 
-    // Check cache
-    if (searchCache[cacheKey]) {
-      setDiscoveredLeads(searchCache[cacheKey].leads);
-      setSearchSummary(searchCache[cacheKey].summary);
-      setLoading(false);
-      return;
+    const cacheKey = `${selectedProviderId}|${cleanCountry.toLowerCase()}|${cleanCity.toLowerCase() || 'all'}|${cleanIndustry.toLowerCase()}|${cleanKeyword.toLowerCase()}|limit=${requestedLimit}`;
+
+    // Check cache with 15-minute TTL unless user clicks force refresh
+    if (!forceRefresh && searchCache[cacheKey]) {
+      const cached = searchCache[cacheKey];
+      if (Date.now() - (cached.timestamp || 0) < 15 * 60 * 1000) {
+        setDiscoveredLeads(cached.leads);
+        setSearchSummary(cached.summary);
+        setLoading(false);
+        return;
+      }
     }
 
     const { ok, data, error, code } = await loggedFetch('/api/ai/find-clients', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
-        country, 
-        industry, 
-        city,
+        country: cleanCountry, 
+        industry: cleanIndustry, 
+        city: cleanCity,
         opportunityType,
         companyStage,
         budgetTarget,
         technology,
-        keyword,
-        providerId: selectedProviderId
+        keyword: cleanKeyword,
+        providerId: selectedProviderId,
+        limit: requestedLimit,
+        leadStrategy
       }),
     });
 
@@ -175,12 +195,17 @@ export const FinderView: React.FC<FinderViewProps> = ({
       rawLeads.forEach((item: any) => {
         const leadObj = {
           ...item,
-          city: item.city || city || 'Local',
-          country: item.country || country,
+          city: item.city || cleanCity || 'Local',
+          country: item.country || cleanCountry,
           verificationStatus: item.verificationStatus || 'VERIFIED',
-          source: item.source || 'Google Live Search Engine',
+          source: item.source || data.provider || 'SerpApi Google Maps',
           sourceUrl: item.sourceUrl || item.website || '',
-          evidenceText: item.evidenceText || `Discovered active company in ${item.city || country} with requirement for ${item.suggestedService || 'Web Development'}.`,
+          address: item.address || '',
+          google_place_id: item.placeId || item.google_place_id,
+          rating: item.rating,
+          review_count: item.reviews ?? item.review_count,
+          missingFields: item.missingFields || [],
+          evidenceText: item.evidenceText || `Discovered active company in ${item.city || cleanCity || cleanCountry} with requirement for ${item.suggestedService || 'Web Development'}.`,
         };
 
         if (checkIsSuppressed(leadObj, suppressedRecords)) {
@@ -193,16 +218,27 @@ export const FinderView: React.FC<FinderViewProps> = ({
       });
 
       const summary = {
+        requestedCount: data.summary?.requestedCount || requestedLimit,
         rawCount: data.rawCount || rawLeads.length,
         newCount: validActiveLeads.length,
-        duplicateCount,
+        duplicateCount: (data.summary?.duplicates || 0) + duplicateCount,
         suppressedCount,
         finalActive: validActiveLeads.length,
+        source: data.provider || 'SerpApi Google Maps',
+        missingFields: data.summary?.missingFields || {
+          missingWebsite: validActiveLeads.filter(l => !l.website || l.website === 'Not found').length,
+          missingPhone: validActiveLeads.filter(l => !l.phone || l.phone === 'Not found').length,
+          missingEmail: validActiveLeads.length,
+          missingContactPerson: validActiveLeads.length,
+        },
       };
 
       setDiscoveredLeads(validActiveLeads);
       setSearchSummary(summary);
-      setSearchCache((prev) => ({ ...prev, [cacheKey]: { leads: validActiveLeads, summary } }));
+      setSearchCache((prev) => ({ 
+        ...prev, 
+        [cacheKey]: { leads: validActiveLeads, summary, timestamp: Date.now() } 
+      }));
       fetchProviderHealth();
     } else {
       const msg = error || data?.error || 'Live lead provider not configured or temporarily unavailable.';
@@ -256,10 +292,14 @@ export const FinderView: React.FC<FinderViewProps> = ({
       email: cleanEmail,
       phone: cleanPhone,
       website: cleanWebsite,
+      address: item.address || '',
       industry: item.industry || industry,
       niche: item.industry || industry,
       country: item.country || country,
       city: item.city || city || 'Local',
+      google_place_id: item.placeId || item.google_place_id,
+      rating: item.rating,
+      review_count: item.reviews ?? item.review_count,
       score: scoreData.totalScore,
       temperature: item.temperature || (scoreData.totalScore >= 80 ? 'HOT' : scoreData.totalScore >= 65 ? 'GOOD' : 'POTENTIAL'),
       contactStatus: 'Not Contacted',
@@ -290,6 +330,9 @@ export const FinderView: React.FC<FinderViewProps> = ({
       verificationScore: item.verificationScore || 85,
       verificationStatus: item.verificationStatus || 'VERIFIED',
       fieldVerification: item.fieldVerification,
+      missingFields: item.missingFields,
+      source: item.source || 'SerpApi Google Maps',
+      sourceUrl: item.sourceUrl || item.website || '',
     };
 
     onImportLead(newLead);
@@ -554,8 +597,9 @@ export const FinderView: React.FC<FinderViewProps> = ({
             </div>
 
             {/* Main Search Parameters Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3.5">
-              {/* Target Niche / Industry (Unrestricted Free-Form) */}
+            {/* Main Search Parameters Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+              {/* 1. Target Niche / Industry (Unrestricted Free-Form) */}
               <div className="space-y-1.5">
                 <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
                   Target Niche / Industry
@@ -564,18 +608,18 @@ export const FinderView: React.FC<FinderViewProps> = ({
                   type="text"
                   value={industry}
                   onChange={(e) => setIndustry(e.target.value)}
-                  placeholder="e.g. SaaS, Healthcare, E-Commerce, Agencies..."
+                  placeholder="e.g. Salons, Dental, Healthcare, SaaS, Agencies..."
                   className="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 text-xs text-slate-900 font-medium focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                 />
                 {/* Meaningful Niche Selection Pills */}
                 <div className="flex flex-wrap gap-1 pt-1">
                   {[
-                    { label: 'SaaS Startups', ind: 'SaaS & AI Startups', opp: 'Startup MVP Frontend' },
-                    { label: 'Local Services', ind: 'Local Service Businesses', opp: 'Website Redesign & Modernization' },
+                    { label: 'Salons', ind: 'Salons', opp: 'Website Redesign & Modernization' },
+                    { label: 'Dental & Clinics', ind: 'Dental Clinics', opp: 'Website Redesign & Modernization' },
+                    { label: 'SaaS Startups', ind: 'SaaS Startups', opp: 'Startup MVP Frontend' },
+                    { label: 'Web Agencies', ind: 'Web Agencies', opp: 'Frontend Subcontracting / Contract' },
+                    { label: 'Restaurants', ind: 'Restaurants & Cafes', opp: 'Website Redesign & Modernization' },
                     { label: 'E-Commerce', ind: 'E-Commerce & Retail', opp: '$2,000+ Client Projects' },
-                    { label: 'Education & LMS', ind: 'Education & LMS Platforms', opp: 'Custom Web Portal & Dashboard' },
-                    { label: 'Healthcare (Public)', ind: 'Healthcare Providers', opp: 'Website Redesign & Modernization' },
-                    { label: 'Web Agencies', ind: 'Web & Marketing Agencies', opp: 'Frontend Subcontracting / Contract' },
                   ].map((niche) => (
                     <button
                       key={niche.label}
@@ -583,14 +627,14 @@ export const FinderView: React.FC<FinderViewProps> = ({
                       onClick={() => {
                         setIndustry(niche.ind);
                         setOpportunityType(niche.opp);
-                        if (niche.ind === 'Web & Marketing Agencies') {
+                        if (niche.ind === 'Web Agencies') {
                           setLeadStrategy('AGENCY_PARTNERSHIPS');
                         } else {
                           setLeadStrategy('DIRECT_CLIENTS');
                         }
                       }}
                       className={`text-[10px] px-2 py-0.5 rounded-md font-semibold transition ${
-                        industry === niche.ind
+                        industry.toLowerCase().includes(niche.ind.toLowerCase())
                           ? 'bg-indigo-600 text-white'
                           : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                       }`}
@@ -601,27 +645,58 @@ export const FinderView: React.FC<FinderViewProps> = ({
                 </div>
               </div>
 
-              {/* Target Location / City / Country (Unrestricted Free-Form) */}
+              {/* 2. Target City / Region */}
               <div className="space-y-1.5">
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
-                  Location (Country / City / Global)
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1">
+                  <MapPin className="w-3.5 h-3.5 text-indigo-600" /> City / Metropolitan Area
+                </label>
+                <input
+                  type="text"
+                  value={city}
+                  onChange={(e) => setCity(e.target.value)}
+                  placeholder="e.g. Austin, New York, Chicago, London, Lahore..."
+                  className="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 text-xs text-slate-900 font-medium focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                />
+                {/* Quick City Pills */}
+                <div className="flex flex-wrap gap-1 pt-1">
+                  {['Austin', 'New York', 'San Francisco', 'Chicago', 'London', 'Lahore'].map((c) => (
+                    <button
+                      key={c}
+                      type="button"
+                      onClick={() => setCity(c)}
+                      className={`text-[10px] px-2 py-0.5 rounded-md font-semibold transition ${
+                        city.toLowerCase() === c.toLowerCase()
+                          ? 'bg-indigo-600 text-white'
+                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      {c}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* 3. Target Country */}
+              <div className="space-y-1.5">
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1">
+                  <Globe className="w-3.5 h-3.5 text-indigo-600" /> Country / Territory
                 </label>
                 <input
                   type="text"
                   value={country}
                   onChange={(e) => setCountry(e.target.value)}
-                  placeholder="e.g. USA, Austin TX, Pakistan, Lahore, UK, London, Global..."
+                  placeholder="e.g. USA, United Kingdom, Canada, Pakistan..."
                   className="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 text-xs text-slate-900 font-medium focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                 />
-                {/* Quick Location Pills */}
+                {/* Quick Country Pills */}
                 <div className="flex flex-wrap gap-1 pt-1">
-                  {['USA', 'Pakistan', 'United Kingdom', 'Canada', 'Australia', 'UAE / Dubai', 'Remote Global'].map((loc) => (
+                  {['USA', 'United Kingdom', 'Canada', 'Australia', 'Pakistan'].map((loc) => (
                     <button
                       key={loc}
                       type="button"
                       onClick={() => setCountry(loc)}
                       className={`text-[10px] px-2 py-0.5 rounded-md font-semibold transition ${
-                        country === loc
+                        country.toLowerCase() === loc.toLowerCase()
                           ? 'bg-indigo-600 text-white'
                           : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                       }`}
@@ -632,29 +707,27 @@ export const FinderView: React.FC<FinderViewProps> = ({
                 </div>
               </div>
 
-              {/* Opportunity Goal / Project Type */}
+              {/* 4. Requested Result Limit (Max 100) */}
               <div className="space-y-1.5">
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
-                  Opportunity & Project Goal
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center justify-between">
+                  <span>Results Limit</span>
+                  <span className="text-[10px] text-indigo-600 font-semibold">Up to 100</span>
                 </label>
                 <select
-                  value={opportunityType}
-                  onChange={(e) => setOpportunityType(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 text-xs text-slate-900 font-medium focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                  value={requestedLimit}
+                  onChange={(e) => setRequestedLimit(Number(e.target.value))}
+                  className="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 text-xs text-slate-900 font-bold focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                 >
-                  <option value="$2,000+ Client Projects">$2,000+ Full Client Projects</option>
-                  <option value="Website Redesign & Modernization">Website Redesign & Modernization</option>
-                  <option value="Startup MVP Frontend">Startup MVP Frontend (React/Next.js)</option>
-                  <option value="Custom Web Portal & Dashboard">Custom Web Portal & Dashboard</option>
-                  <option value="Mobile Performance & Speed Fix">Mobile Performance & Speed Fix</option>
-                  <option value="Frontend Subcontracting / Contract">Frontend Subcontracting / Contract</option>
+                  <option value={20}>20 Leads (1 Page / Fast)</option>
+                  <option value={50}>50 Leads (Multi-Page Deep Search)</option>
+                  <option value={100}>100 Leads (Maximum Discovery)</option>
                 </select>
                 <div className="text-[10px] text-slate-500 pt-1 font-medium">
-                  Filters by real client budget & frontend opportunity
+                  Paginated retrieval across SerpApi Google Maps
                 </div>
               </div>
 
-              {/* Lead Provider Engine */}
+              {/* 5. Lead Provider Engine */}
               <div className="space-y-1.5">
                 <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
                   Discovery Engine Provider
@@ -674,19 +747,41 @@ export const FinderView: React.FC<FinderViewProps> = ({
                   <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Active credentials verified
                 </div>
               </div>
+
+              {/* 6. Opportunity Goal / Project Type */}
+              <div className="space-y-1.5">
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+                  Opportunity & Project Goal
+                </label>
+                <select
+                  value={opportunityType}
+                  onChange={(e) => setOpportunityType(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 text-xs text-slate-900 font-medium focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                >
+                  <option value="$2,000+ Client Projects">$2,000+ Full Client Projects</option>
+                  <option value="Website Redesign & Modernization">Website Redesign & Modernization</option>
+                  <option value="Startup MVP Frontend">Startup MVP Frontend (React/Next.js)</option>
+                  <option value="Custom Web Portal & Dashboard">Custom Web Portal & Dashboard</option>
+                  <option value="Mobile Performance & Speed Fix">Mobile Performance & Speed Fix</option>
+                  <option value="Frontend Subcontracting / Contract">Frontend Subcontracting / Contract</option>
+                </select>
+                <div className="text-[10px] text-slate-500 pt-1 font-medium">
+                  Used for post-discovery opportunity qualification
+                </div>
+              </div>
             </div>
 
             {/* Custom Specific Requirements / Pitch Focus Bar */}
             <div className="pt-2">
               <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                Specific Keyword, Problem, or Custom Search Prompt (Optional)
+                Specific Keyword or Category Modifier (Optional)
               </label>
               <div className="flex gap-2">
                 <input
                   type="text"
                   value={keyword}
                   onChange={(e) => setKeyword(e.target.value)}
-                  placeholder="e.g. Outdated WordPress site needing Next.js, slow mobile speed, missing booking portal, hiring React contractor..."
+                  placeholder="e.g. hair stylist, cosmetic surgery, boutique, web design, plumbing..."
                   className="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 text-xs text-slate-900 placeholder-slate-400 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                 />
               </div>
@@ -696,17 +791,17 @@ export const FinderView: React.FC<FinderViewProps> = ({
             <div className="flex flex-col sm:flex-row items-center justify-between pt-3 border-t border-slate-100 gap-3">
               <div className="text-xs text-slate-500 font-medium flex items-center gap-2">
                 <ShieldCheck className="w-4 h-4 text-emerald-600" />
-                <span>Strict real-data enforcement active. Zero demo/simulated records.</span>
+                <span>Real local businesses only from Google Maps. Up to {requestedLimit} unique records.</span>
               </div>
 
               <button
-                onClick={handleSearch}
+                onClick={() => handleSearch(false)}
                 disabled={loading}
                 className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-md transition"
               >
                 {loading ? (
                   <>
-                    <Loader2 className="w-4 h-4 animate-spin" /> Querying Live Web Index for Real Clients...
+                    <Loader2 className="w-4 h-4 animate-spin" /> Querying Google Maps via SerpApi...
                   </>
                 ) : (
                   <>
@@ -759,33 +854,72 @@ export const FinderView: React.FC<FinderViewProps> = ({
 
           {/* Search Session Statistics Summary Bar */}
           {searchSummary && (
-            <div className="bg-slate-900 text-white p-4 rounded-2xl border border-slate-800 shadow-md flex flex-wrap items-center justify-between gap-4 text-xs">
-              <div className="flex items-center gap-2 font-bold text-indigo-300">
-                <Sparkles className="w-4 h-4 text-indigo-400" /> Discovery Pipeline Metrics:
+            <div className="bg-slate-900 text-white p-4 rounded-2xl border border-slate-800 shadow-md space-y-3 text-xs">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                <div className="flex items-center gap-2 font-bold text-indigo-300">
+                  <Sparkles className="w-4 h-4 text-indigo-400" />
+                  <span className="font-extrabold text-white">Discovery Results Summary:</span>
+                  <span className="text-slate-400 font-normal">Source: <strong className="text-slate-200">{searchSummary.source}</strong></span>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-3 text-slate-300 font-semibold">
+                  <span>Target Requested: <strong className="text-white">{searchSummary.requestedCount}</strong></span>
+                  <span>•</span>
+                  <span>Unique Results: <strong className="text-emerald-400">{searchSummary.finalActive}</strong></span>
+                  <span>•</span>
+                  <span>Duplicates Filtered: <strong className="text-amber-400">{searchSummary.duplicateCount}</strong></span>
+                  <span>•</span>
+                  <span>Suppressed: <strong className="text-rose-400">{searchSummary.suppressedCount}</strong></span>
+                </div>
               </div>
 
-              <div className="flex items-center gap-4 text-slate-300 font-semibold">
-                <span>Raw Candidates: <strong className="text-white">{searchSummary.rawCount}</strong></span>
-                <span>•</span>
-                <span>Validated Active: <strong className="text-emerald-400">{searchSummary.newCount}</strong></span>
-                <span>•</span>
-                <span>Duplicates Filtered: <strong className="text-amber-400">{searchSummary.duplicateCount}</strong></span>
-                <span>•</span>
-                <span>Suppressed: <strong className="text-rose-400">{searchSummary.suppressedCount}</strong></span>
-              </div>
+              {searchSummary.missingFields && (
+                <div className="flex flex-wrap items-center gap-3 pt-2 border-t border-slate-800 text-[11px] text-slate-400 font-medium">
+                  <span className="font-bold text-indigo-300">Provider Field Provenance:</span>
+                  <span>No Website: <strong className="text-amber-300">{searchSummary.missingFields.missingWebsite}</strong></span>
+                  <span>•</span>
+                  <span>No Phone: <strong className="text-amber-300">{searchSummary.missingFields.missingPhone}</strong></span>
+                  <span>•</span>
+                  <span>Public Email Not Listed: <strong className="text-slate-300">{searchSummary.missingFields.missingEmail}</strong></span>
+                  <span>•</span>
+                  <span>Executive Contact Not Listed: <strong className="text-slate-300">{searchSummary.missingFields.missingContactPerson}</strong></span>
+                </div>
+              )}
             </div>
           )}
 
           {/* Discovered Leads List or Empty State */}
           {discoveredLeads.length > 0 ? (
             <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-              <div className="p-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
-                <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
-                  Discovered Opportunities ({discoveredLeads.length})
-                </h3>
-                <span className="text-xs text-slate-500 font-medium">
-                  Filtered against suppression list & active database
-                </span>
+              <div className="p-4 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between bg-slate-50 gap-3">
+                <div>
+                  <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                    Discovered Opportunities ({discoveredLeads.length})
+                    <span className="text-[10px] px-2 py-0.5 bg-indigo-100 text-indigo-800 font-extrabold rounded-full">
+                      Requested: {searchSummary?.requestedCount || requestedLimit}
+                    </span>
+                  </h3>
+                  <p className="text-xs text-slate-500 font-medium mt-0.5">
+                    Real operating businesses from {searchSummary?.source || 'SerpApi Google Maps'} in {city ? `${city}, ` : ''}{country}
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => handleSearch(true)}
+                    disabled={loading}
+                    className="px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 font-bold rounded-xl text-xs inline-flex items-center gap-1.5 transition shadow-xs"
+                    title="Bypass cached results and fetch freshly from provider"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} /> Refresh
+                  </button>
+                  <button
+                    onClick={() => exportLeadsToExcel(discoveredLeads, `LeadFlow_${city || country}_${industry}.xlsx`)}
+                    className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-xs inline-flex items-center gap-1.5 transition shadow-xs"
+                  >
+                    <FileText className="w-3.5 h-3.5" /> Export Results (.xlsx)
+                  </button>
+                </div>
               </div>
 
               <div className="divide-y divide-slate-200">
@@ -805,6 +939,13 @@ export const FinderView: React.FC<FinderViewProps> = ({
                             <h4 className="font-extrabold text-slate-900 text-base">
                               {item.businessName}
                             </h4>
+
+                            {/* Google Rating Badge */}
+                            {typeof item.rating === 'number' && (
+                              <span className="px-2 py-0.5 bg-amber-50 text-amber-900 font-bold text-[10px] rounded-full border border-amber-200 flex items-center gap-1">
+                                ⭐ {item.rating} ({item.reviews || item.review_count || 0} reviews)
+                              </span>
+                            )}
 
                             {/* Verification Badge */}
                             {item.verificationStatus === 'UNVERIFIED' ? (
@@ -856,9 +997,9 @@ export const FinderView: React.FC<FinderViewProps> = ({
                               )}
                             </span>
                             <span>•</span>
-                            <span className="flex items-center gap-1">
+                            <span className="flex items-center gap-1" title={item.address || ''}>
                               <MapPin className="w-3 h-3 text-slate-400" />
-                              {item.city || city || 'Local'}, {item.country || country}
+                              {item.address || `${item.city || city || 'Local'}, ${item.country || country}`}
                             </span>
                             <span>•</span>
                             {item.website && item.website !== 'Not found' && !item.website.includes('domain.com') ? (

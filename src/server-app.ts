@@ -316,7 +316,7 @@ app.post("/api/provider/config", async (req: Request, res: Response) => {
 // 2. AI Lead Discovery (Provider-Agnostic Interface)
 app.post("/api/ai/find-clients", async (req: Request, res: Response) => {
   try {
-    const { country, industry, city, service, targetService, problemFocus, opportunityType, budgetTarget, keyword, providerId } = req.body;
+    const { country, industry, city, service, targetService, problemFocus, opportunityType, budgetTarget, keyword, providerId, limit, requestedLimit, leadStrategy } = req.body;
     const provider = getLiveDataProvider(providerId);
 
     if (!provider.isConfigured()) {
@@ -329,7 +329,21 @@ app.post("/api/ai/find-clients", async (req: Request, res: Response) => {
       });
     }
 
-    const result = await provider.searchBusinesses({ country, industry, city, service, targetService, problemFocus, opportunityType, budgetTarget, keyword, providerId });
+    const searchLimit = Math.min(100, Math.max(1, Number(limit || requestedLimit) || 20));
+    const result = await provider.searchBusinesses({ 
+      country, 
+      industry, 
+      city, 
+      service, 
+      targetService, 
+      problemFocus, 
+      opportunityType, 
+      budgetTarget, 
+      keyword, 
+      providerId,
+      limit: searchLimit,
+      leadStrategy
+    });
 
     if (!result.success) {
       const statusCode = result.statusCode || 500;
@@ -342,18 +356,40 @@ app.post("/api/ai/find-clients", async (req: Request, res: Response) => {
       });
     }
 
+    const leadsList = result.leads || [];
+    const missingSummary = result.missingFieldsSummary || {
+      missingWebsite: leadsList.filter((l) => !l.website || l.website === "Not found").length,
+      missingPhone: leadsList.filter((l) => !l.phone || l.phone === "Not found").length,
+      missingEmail: leadsList.filter((l) => !l.email || l.email === "Not found").length,
+      missingContactPerson: leadsList.filter((l) => !l.contactPerson || l.contactPerson === "Not found").length,
+    };
+
     res.json({
       success: true,
-      leads: result.leads || [],
+      leads: leadsList,
       provider: result.provider,
-      query: { country, industry, city, service: service || targetService, opportunityType, budgetTarget, keyword, providerId: provider.id },
-      rawCount: result.rawCount || (result.leads ? result.leads.length : 0),
+      query: { 
+        country, 
+        industry, 
+        city, 
+        service: service || targetService, 
+        opportunityType, 
+        budgetTarget, 
+        keyword, 
+        limit: result.targetLimit || searchLimit,
+        providerId: provider.id 
+      },
+      rawCount: result.rawCount || leadsList.length,
+      limit: result.targetLimit || searchLimit,
       summary: {
+        requestedCount: result.targetLimit || searchLimit,
         candidatesDiscovered: result.rawCount || 0,
-        verified: result.validatedCount || (result.leads ? result.leads.length : 0),
+        verified: result.validatedCount || leadsList.length,
         rejected: result.rejectedCount || 0,
         duplicates: result.duplicatesRemovedCount || 0,
         suppressed: result.suppressedCount || 0,
+        missingFields: missingSummary,
+        source: result.provider,
       },
     });
   } catch (err: any) {

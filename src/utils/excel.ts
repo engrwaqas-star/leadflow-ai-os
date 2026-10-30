@@ -23,36 +23,43 @@ export function sanitizeCellValue(value: any): any {
 /**
  * Maps Lead objects to clean, sanitized row records for spreadsheet export.
  */
-export function formatLeadsForExport(leads: Lead[]): Record<string, any>[] {
+export function formatLeadsForExport(leads: any[]): Record<string, any>[] {
   return leads.map((l) => ({
     'Business Name': sanitizeCellValue(l.businessName),
     'Contact Person': sanitizeCellValue(l.contactPerson),
     'Email': sanitizeCellValue(l.email),
     'Phone': sanitizeCellValue(l.phone),
     'Website': sanitizeCellValue(l.website),
-    'Industry': sanitizeCellValue(l.industry),
-    'Country': sanitizeCellValue(l.country),
+    'Address': sanitizeCellValue(l.address || ''),
     'City': sanitizeCellValue(l.city || ''),
+    'Country': sanitizeCellValue(l.country || ''),
+    'Industry': sanitizeCellValue(l.industry || ''),
+    'Source': sanitizeCellValue(l.source || 'SerpApi Google Maps'),
+    'Source URL': sanitizeCellValue(l.sourceUrl || l.source_url || l.website || ''),
+    'Verification Status': sanitizeCellValue(l.verificationStatus || l.verification_status || 'VERIFIED'),
+    'Google Place ID': sanitizeCellValue(l.google_place_id || l.placeId || ''),
+    'Rating': l.rating ?? '',
+    'Reviews': l.reviews ?? l.review_count ?? '',
     'Pipeline Stage': sanitizeCellValue(determineLeadStage(l)),
     'Strategy': l.leadStrategy === 'AGENCY_PARTNERSHIPS' ? 'Agency Partnership' : 'Direct Client',
-    'Score': l.score,
-    'Temperature': l.temperature,
+    'Score': l.score ?? l.qualificationScore ?? 75,
+    'Temperature': l.temperature || 'POTENTIAL',
     'Estimated Budget': sanitizeCellValue(l.estimatedBudget || 'Unverified'),
-    'Contact Status': sanitizeCellValue(l.contactStatus),
+    'Contact Status': sanitizeCellValue(l.contactStatus || 'Not Contacted'),
     'Audit Status': l.auditStatus || 'Pending',
-    'Audit Issue': sanitizeCellValue(l.auditIssue),
+    'Audit Issue': sanitizeCellValue(l.auditIssue || 'Technical website audit pending live inspection'),
     'Speed Rating': l.speedRating || 'Average',
     'Mobile Viewport': l.mobileViewport ? 'Responsive' : 'Missing',
     'Clear CTA': l.clearCTA ? 'Yes' : 'No',
     'Skill Gaps': sanitizeCellValue(l.skillGaps?.join(', ') || 'None'),
-    'Suggested Service': sanitizeCellValue(l.suggestedService),
-    'Pitch Hook': sanitizeCellValue(l.pitchHook),
+    'Suggested Service': sanitizeCellValue(l.suggestedService || ''),
+    'Pitch Hook': sanitizeCellValue(l.pitchHook || ''),
     'Last Contact': sanitizeCellValue(l.lastContactDate || ''),
     'Notes': sanitizeCellValue(l.notes || ''),
   }));
 }
 
-export function exportLeadsToExcel(leads: Lead[], filename = 'LeadFlow_Leads.xlsx') {
+export function exportLeadsToExcel(leads: any[], filename = 'LeadFlow_Leads.xlsx') {
   const data = formatLeadsForExport(leads);
 
   const worksheet = XLSX.utils.json_to_sheet(data);

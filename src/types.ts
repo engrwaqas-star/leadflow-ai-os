@@ -290,6 +290,7 @@ export interface Lead {
     contactPersonVerified: boolean;
   };
   rejectionReason?: string;
+  missingFields?: string[];
   // Enriched fields
   enrichment?: CompanyEnrichment;
   credibility?: CredibilityData;
